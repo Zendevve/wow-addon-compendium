@@ -225,4 +225,7 @@ without refactoring:
 
 ## License
 
-MIT
+Proprietary — see [LICENSE](LICENSE). Copyright (c) 2026 Zendevve. All rights
+reserved. Personal, non-commercial use within World of Warcraft is permitted;
+modification, redistribution, and reuse of the source code require prior
+written permission from the copyright holder.
