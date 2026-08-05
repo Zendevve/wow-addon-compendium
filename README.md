@@ -50,16 +50,19 @@ confirmation screens.
   `wowfix install <url|owner/repo>` installs straight from any provider.
 - **Update manager** — catalog installs are tracked in a registry;
   `wowfix update` (or `u`/`U` in the TUI) checks every tracked addon
-  against its provider and applies newer releases.
+  against its provider and applies newer releases. Update safety:
+  updates targeting a different game version are flagged (⚠) and
+  skipped by default unless you confirm.
 - **Addon profiles** — capture the current addon setup as a named
   collection (PvE/PvP/Raiding/Leveling presets) and switch between
   them; switching renames folders to `<name>.disabled` and back
   (`o` in the TUI).
-- **SavedVariables** — back up, restore and reset the per-account
-  `SavedVariables` files under `WTF/Account/<account>/` (`v` in the TUI).
-- **Import / Export** — share addon setups as a JSON manifest, a bundle
-  ZIP (manifest + local addon folders + SavedVariables) or a GitHub
-  repo list; importing installs through the catalog.
+- **SavedVariables** — back up, restore, reset and migrate between
+  accounts the per-account `SavedVariables` files under
+  `WTF/Account/<account>/` (`v` in the TUI).
+- **Import / Export** — share addon setups as a JSON or YAML manifest,
+  a bundle ZIP (manifest + local addon folders + SavedVariables) or a
+  GitHub repo list; importing installs through the catalog.
 - **TUI v2** — fuzzy addon filter (`/`), a help overlay (`?`), a catalog
   browser (`c`), an updates panel (`u`/`U`), install-from-source (`i`)
   and mouse-wheel scrolling throughout.
@@ -166,9 +169,9 @@ wowfix doctor                 check environment and permissions
 wowfix config [set <key> <val>]  show or edit configuration
 wowfix profile                manage addon collections (list/show/create/duplicate/
                               rename/delete/switch/enable/disable)
-wowfix savedvars              list/back up/restore/reset SavedVariables
-wowfix export <out.json|out.zip>  export a collection [--collection <id>] [--savedvars]
-wowfix import <file|url>      import a manifest, bundle zip or GitHub repo list
+wowfix savedvars              list/back up/restore/reset/migrate SavedVariables
+wowfix export <out.json|out.yaml|out.zip>  export a collection [--collection <id>] [--savedvars]
+wowfix import <file|url>      import a manifest (JSON/YAML), bundle zip or GitHub repo list
 wowfix version                print version
 wowfix preview                render a text preview of the TUI
 wowfix help                   show this help
@@ -178,8 +181,9 @@ Common flags: `--path <dir>` (WoW root, overrides config), `--yes` (skip
 prompts), `--json` (machine-readable output for `scan`/`list`/`validate`/
 `search`/`sources`/`install`/`restore`/`config`/`profile`/`savedvars`/
 `export`/`import`). Command-specific flags: `--account <name>` and
-`--dest <dir>` (`savedvars`), `--collection <id>` and `--savedvars`
-(`export`).
+`--dest <dir>` (`savedvars`), `--from <account>` `--to <account>` and
+`--addon <name>` (`savedvars migrate`), `--collection <id>` and
+`--savedvars` (`export`).
 
 `install` accepts a local `.zip`, a provider URL (CurseForge, WowInterface,
 Tukui, GitHub) or a GitHub `owner/repo` pair. `search` degrades gracefully
@@ -251,11 +255,15 @@ wowfix savedvars list --account "123#1"      # or an explicit account
 wowfix savedvars backup --dest D:\sv-backups # timestamped copy, prints path
 wowfix savedvars restore D:\sv-backups\2026-…  # restores; current state snapshotted first
 wowfix savedvars reset DBM                   # deletes DBM.lua (exact stem: DBM-Core.lua survives)
+wowfix savedvars migrate --from "123#1" --to "alt#1"          # copy all SavedVariables between accounts
+wowfix savedvars migrate --from "123#1" --to "alt#1" --addon DBM  # copy a single addon's settings
 ```
 
 With several accounts and no `--account`, the first is used and the
 choice is announced. Restore refuses paths outside the WTF root, and
 reset matches the exact file stem so `DBM` never deletes `DBM-Core.lua`.
+Migration never overwrites existing destination files (they are skipped
+and reported) and requires both accounts to exist.
 In the TUI press `v`: `enter` cycles accounts, `b` backs up to the
 config dir, `r` resets the selected file (confirmed).
 
@@ -282,12 +290,17 @@ provider are local-only and travel inside a bundle.
 
 ```sh
 wowfix export out.json                    # manifest of the current setup
+wowfix export out.yaml                    # the same manifest as YAML
 wowfix export bundle.zip --savedvars      # bundle: manifest + local addon folders + SavedVariables
 wowfix export out.json --collection pve   # export a specific collection
 wowfix import out.json                    # install remote entries; local ones are checked/skipped
+wowfix import out.yaml                    # YAML manifests import the same way
 wowfix import bundle.zip                  # installs remote + local entries, restores savedvars/
 wowfix import https://gist.github.com/…/list.txt   # one "owner/repo" per line, # = comment
 ```
+
+A manifest is JSON or YAML describing an addon setup; the extension
+(`.json`, `.yaml`, `.yml`) picks the format on import.
 
 A bundle zip contains `manifest.json` at the root, local addon folders
 under `addons/<Folder>/` and SavedVariables under `savedvars/` (restored
@@ -375,9 +388,11 @@ without refactoring:
 
 ## Roadmap
 
-- Wago/other provider plugins, update filters (ignore major versions)
-- Migration of SavedVariables between accounts
-- YAML manifest export
+- Wago/other provider plugins (the provider interface is ready; a new
+  source is a new `catalog.Provider` implementation)
+- Catalog screenshots (thumbnails of addon pages in the catalog browser)
+- Plugin-architecture formalization (stable public interfaces so
+  third-party scanner rules and providers can be loaded without forks)
 
 ## License
 

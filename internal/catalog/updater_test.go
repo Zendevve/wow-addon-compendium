@@ -11,6 +11,7 @@ import (
 
 	"github.com/wowfix/wowfix/internal/backup"
 	"github.com/wowfix/wowfix/internal/logger"
+	"github.com/wowfix/wowfix/internal/models"
 )
 
 // addonZip builds a valid addon archive with one folder carrying a
@@ -34,8 +35,9 @@ func addonZip(t *testing.T, folder, tocContent string) []byte {
 
 // versionedProvider reports a fixed latest version per addon id.
 type versionedProvider struct {
-	name     string
-	versions map[string]string
+	name         string
+	versions     map[string]string
+	gameVersions map[string]string
 }
 
 func (p *versionedProvider) Name() string { return p.name }
@@ -45,11 +47,11 @@ func (p *versionedProvider) Search(ctx context.Context, query string, limit int)
 }
 
 func (p *versionedProvider) Resolve(ctx context.Context, id string) (*Addon, error) {
-	return &Addon{Provider: p.name, ID: id, Name: id, LatestVersion: p.versions[id]}, nil
+	return &Addon{Provider: p.name, ID: id, Name: id, LatestVersion: p.versions[id], GameVersion: p.gameVersions[id]}, nil
 }
 
 func (p *versionedProvider) Latest(ctx context.Context, addon *Addon) (*Addon, error) {
-	return &Addon{Provider: p.name, ID: addon.ID, Name: addon.ID, LatestVersion: p.versions[addon.ID]}, nil
+	return &Addon{Provider: p.name, ID: addon.ID, Name: addon.ID, LatestVersion: p.versions[addon.ID], GameVersion: p.gameVersions[addon.ID]}, nil
 }
 
 func (p *versionedProvider) Download(ctx context.Context, addon *Addon, dest string, progress func(done, total int64)) error {
@@ -276,5 +278,82 @@ func TestPickInstalled(t *testing.T) {
 	}
 	if got := pickInstalled([]string{"A", "B"}, "Z"); got != "A" {
 		t.Errorf("fallback to first failed: %q", got)
+	}
+}
+
+func TestGameFamilyMismatch(t *testing.T) {
+	vanilla := models.ProfileByID("vanilla")
+	wrath := models.ProfileByID("wrath")
+	tests := []struct {
+		name        string
+		profile     *models.Profile
+		gameVersion string
+		want        bool
+	}{
+		{"classic addon on vanilla profile", vanilla, "classic", false},
+		{"turtle addon on vanilla profile", vanilla, "turtle", false},
+		{"hardcore addon on vanilla profile", vanilla, "hardcore", false},
+		{"sod addon on vanilla profile", vanilla, "sod", false},
+		{"wrath addon on wrath profile", wrath, "wrath", false},
+		{"wrath addon on vanilla profile", vanilla, "wrath", true},
+		{"turtle addon on wrath profile", wrath, "turtle", true},
+		{"empty gameVersion", wrath, "", false},
+		{"nil profile", nil, "wrath", false},
+		{"numeric version fallback", wrath, "3.3.5", false},
+		{"numeric version mismatch", vanilla, "3.3.5", true},
+		{"unknown family", vanilla, "bogus", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := gameFamilyMismatch(tt.profile, tt.gameVersion); got != tt.want {
+				t.Errorf("gameFamilyMismatch(%v, %q) = %v, want %v",
+					tt.profile, tt.gameVersion, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCheckFlagsGameFamilyMismatch(t *testing.T) {
+	vp := &versionedProvider{
+		name: "testprov",
+		versions: map[string]string{
+			"quest": "2.0.0", // entry 1.0.0 -> newer, wrath family
+			"aura":  "1.5.0", // entry 1.0.0 -> newer, classic (vanilla) family
+		},
+		gameVersions: map[string]string{"quest": "wrath", "aura": "classic"},
+	}
+	c := &Catalog{
+		providers: map[string]Provider{"testprov": vp},
+		Profile:   models.ProfileByID("vanilla"),
+	}
+	reg, err := NewRegistry(filepath.Join(t.TempDir(), "registry.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reg.Track(Entry{Folder: "Quest", Title: "Quest", Version: "1.0.0", Provider: "testprov", ID: "quest"})
+	_ = reg.Track(Entry{Folder: "Aura", Title: "Aura", Version: "1.0.0", Provider: "testprov", ID: "aura"})
+
+	updates, err := Check(context.Background(), c, reg, "")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	// Both updates are reported with their mismatch flag set; skipping
+	// is the caller's decision (UI/CLI), not Check's.
+	if len(updates) != 2 {
+		t.Fatalf("got %d updates, want 2 (both reported): %+v", len(updates), updates)
+	}
+	for _, u := range updates {
+		switch u.Entry.Folder {
+		case "Quest":
+			if !u.Mismatch {
+				t.Error("Quest: Mismatch = false, want true (wrath addon on vanilla profile)")
+			}
+		case "Aura":
+			if u.Mismatch {
+				t.Error("Aura: Mismatch = true, want false (classic addon on vanilla profile)")
+			}
+		default:
+			t.Errorf("unexpected update for %q", u.Entry.Folder)
+		}
 	}
 }

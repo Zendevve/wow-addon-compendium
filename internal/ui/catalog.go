@@ -276,6 +276,15 @@ func (a *App) checkUpdatesCmd() tea.Cmd {
 	}
 }
 
+// confirmMismatchUpdate opens the confirm dialog for an update (or
+// several) whose latest release targets a different game version than
+// the configured profile. The "yes" callback applies; the default
+// "no" skips the mismatching updates.
+func (a *App) confirmMismatchUpdate(n int, message string, yes func()) {
+	a.openConfirm(fmt.Sprintf("%d update(s) target a different game version. Apply anyway?", n),
+		message, yes)
+}
+
 // updateCmd updates one addon through the catalog updater.
 func (a *App) updateCmd(u catalog.Update) tea.Cmd {
 	return func() tea.Msg {
@@ -631,11 +640,51 @@ func (a *App) updateUpdatesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		u := a.updates[a.updatesCur]
+		if u.Mismatch {
+			a.confirmMismatchUpdate(1,
+				"Updates for other game versions are skipped by “update all”.",
+				func() {
+					a.busy = true
+					a.busyText = fmt.Sprintf("Updating %s…", u.Entry.Folder)
+					a.cmd = a.updateCmd(u)
+				})
+			return a, nil
+		}
 		a.busy = true
 		a.busyText = fmt.Sprintf("Updating %s…", u.Entry.Folder)
 		return a, a.updateCmd(u)
 	case key.Matches(msg, key.NewBinding(key.WithKeys("U"))): // U: update all
 		if n == 0 {
+			return a, nil
+		}
+		mismatches := 0
+		for _, u := range a.updates {
+			if u.Mismatch {
+				mismatches++
+			}
+		}
+		if mismatches > 0 {
+			a.confirmMismatchUpdate(mismatches,
+				fmt.Sprintf("%d update(s) match your profile; the rest would be skipped unless applied anyway.",
+					n-mismatches),
+				func() {
+					a.busy = true
+					a.busyText = "Updating all addons…"
+					a.cmd = a.updateAllCmd(a.updates)
+				})
+			// no (default): skip mismatches, apply the rest.
+			a.confirmNo = func() {
+				var ok []catalog.Update
+				for _, u := range a.updates {
+					if !u.Mismatch {
+						ok = append(ok, u)
+					}
+				}
+				a.view = viewUpdates
+				a.busy = true
+				a.busyText = "Updating addons…"
+				a.cmd = a.updateAllCmd(ok)
+			}
 			return a, nil
 		}
 		a.openConfirm(fmt.Sprintf("Update all %d addon(s)?", n),
@@ -668,6 +717,16 @@ func (a *App) updateUpdatesDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if a.updatesCur >= 0 && a.updatesCur < len(a.updates) {
 			u := a.updates[a.updatesCur]
 			a.view = viewUpdates
+			if u.Mismatch {
+				a.confirmMismatchUpdate(1,
+					"Updates for other game versions are skipped by “update all”.",
+					func() {
+						a.busy = true
+						a.busyText = fmt.Sprintf("Updating %s…", u.Entry.Folder)
+						a.cmd = a.updateCmd(u)
+					})
+				return a, nil
+			}
 			a.busy = true
 			a.busyText = fmt.Sprintf("Updating %s…", u.Entry.Folder)
 			return a, a.updateCmd(u)
@@ -1011,8 +1070,12 @@ func (a *App) renderUpdates() string {
 			if u.Latest != nil {
 				latest = versionOrDash(u.Latest.LatestVersion)
 			}
+			folder := u.Entry.Folder
+			if u.Mismatch {
+				folder = "⚠ " + folder
+			}
 			line := fmt.Sprintf("%s %s  %s -> %s [%s]",
-				mark, u.Entry.Folder,
+				mark, folder,
 				versionOrDash(u.Entry.Version), latest,
 				providerTag(u.Entry.Provider))
 			if i == a.updatesCur {
@@ -1021,9 +1084,22 @@ func (a *App) renderUpdates() string {
 				b.WriteString(a.styles.Row.Render(pad(line, width)))
 			}
 			b.WriteString("\n")
+			if u.Mismatch && u.Latest != nil && u.Latest.GameVersion != "" {
+				b.WriteString(a.styles.RowMuted.Render("  targets " + u.Latest.GameVersion))
+				b.WriteString("\n")
+			}
 		}
-		b.WriteString("\n" + a.styles.RowMuted.Render(
-			fmt.Sprintf("%d addon(s) up to date", a.upToDate)))
+		mismatches := 0
+		for _, u := range a.updates {
+			if u.Mismatch {
+				mismatches++
+			}
+		}
+		summary := fmt.Sprintf("%d available", len(a.updates))
+		if mismatches > 0 {
+			summary += fmt.Sprintf(", %d for a different game version", mismatches)
+		}
+		b.WriteString("\n" + a.styles.RowMuted.Render(summary))
 		b.WriteString("\n")
 	}
 	b.WriteString(a.styles.Hint.Render("u update · U update all · enter inspect · esc back · q quit"))

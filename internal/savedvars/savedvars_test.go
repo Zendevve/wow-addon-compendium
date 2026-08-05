@@ -230,8 +230,112 @@ func TestResetRefusesTraversal(t *testing.T) {
 }
 
 func TestResetUnknownAddonErrors(t *testing.T) {
+	m, _ := newTestManager(t, map[string][]string{"A1": {"DBM"}})
+	if err := m.Reset("A1", "Nope"); err == nil {
+		t.Fatal("reset of unknown addon should error")
+	}
+}
+
+func TestMigrateCopiesAllAndSelected(t *testing.T) {
+	m, _ := newTestManager(t, map[string][]string{
+		"A1": {"Questie", "DBM", "dbm-core"},
+		"A2": {"WeakAuras"},
+	})
+	// Everything is copied except files that already exist at the
+	// destination (WeakAuras in A2 is left untouched).
+	copied, err := m.Migrate("A1", "A2", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"DBM", "Questie", "dbm-core"}
+	if len(copied) != len(want) {
+		t.Fatalf("copied = %v, want %v", copied, want)
+	}
+	for i := range want {
+		if copied[i] != want[i] {
+			t.Fatalf("copied = %v, want %v", copied, want)
+		}
+	}
+	files, err := m.List("A2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantAll := []string{"DBM", "Questie", "WeakAuras", "dbm-core"}
+	if len(files) != len(wantAll) {
+		t.Fatalf("A2 files = %v, want %v", files, wantAll)
+	}
+	for i := range wantAll {
+		if files[i] != wantAll[i] {
+			t.Fatalf("A2 files = %v, want %v", files, wantAll)
+		}
+	}
+	// A1 is unchanged.
+	files, err = m.List("A1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 3 {
+		t.Fatalf("A1 files = %v", files)
+	}
+
+	// A single addon, case-insensitive stem match: WeakAuras is the
+	// only file in A2 that A1 does not already have.
+	copied, err = m.Migrate("A2", "A1", "weakauras")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(copied) != 1 || copied[0] != "WeakAuras" {
+		t.Fatalf("copied = %v, want [WeakAuras]", copied)
+	}
+	files, err = m.List("A1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantOne := []string{"DBM", "Questie", "WeakAuras", "dbm-core"}
+	if len(files) != len(wantOne) {
+		t.Fatalf("A1 files = %v, want %v", files, wantOne)
+	}
+}
+
+func TestMigrateNeverOverwrites(t *testing.T) {
+	m, _ := newTestManager(t, map[string][]string{
+		"A1": {"Questie", "DBM"},
+		"A2": {"Questie"},
+	})
+	copied, err := m.Migrate("A1", "A2", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Questie exists in A2 and is skipped; DBM is the only copy.
+	if len(copied) != 1 || copied[0] != "DBM" {
+		t.Fatalf("copied = %v, want [DBM]", copied)
+	}
+	// A second run copies nothing.
+	copied, err = m.Migrate("A1", "A2", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(copied) != 0 {
+		t.Fatalf("second migrate copied %v, want none", copied)
+	}
+}
+
+func TestMigrateRequiresBothAccounts(t *testing.T) {
 	m, _ := newTestManager(t, map[string][]string{"A1": {"X"}})
-	if err := m.Reset("A1", "nope"); err == nil {
-		t.Fatal("resetting an unknown addon must error")
+	if _, err := m.Migrate("A1", "nobody", ""); err == nil {
+		t.Fatal("migrate to a missing account should error")
+	}
+	if _, err := m.Migrate("nobody", "A1", ""); err == nil {
+		t.Fatal("migrate from a missing account should error")
+	}
+}
+
+func TestMigrateRefusesTraversal(t *testing.T) {
+	m, _ := newTestManager(t, map[string][]string{
+		"A1": {"X"},
+		"A2": {},
+	})
+	if _, err := m.Migrate("..", "A2", ""); err == nil {
+		t.Fatal("migrate with a traversal account should error")
 	}
 }

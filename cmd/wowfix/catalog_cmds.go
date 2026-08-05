@@ -144,10 +144,19 @@ func runUpdate(args []string) error {
 		return nil
 	}
 
+	mismatches := 0
 	for _, u := range updates {
 		latest := "?"
+		family := ""
 		if u.Latest != nil {
 			latest = u.Latest.LatestVersion
+			family = u.Latest.GameVersion
+		}
+		if u.Mismatch {
+			mismatches++
+			fmt.Printf("⚠ %s: %s -> %s (%s, targets %s)\n",
+				u.Entry.Folder, u.Entry.Version, latest, u.Entry.Provider, family)
+			continue
 		}
 		fmt.Printf("%s: %s -> %s (%s)\n", u.Entry.Folder, u.Entry.Version, latest, u.Entry.Provider)
 	}
@@ -155,10 +164,20 @@ func runUpdate(args []string) error {
 		fmt.Println("Aborted.")
 		return nil
 	}
+	skipMismatch := false
+	if !opts.yes && mismatches > 0 &&
+		!confirm("%d update(s) target a different game version — apply anyway?", mismatches) {
+		skipMismatch = true
+	}
 
 	applied := 0
 	var failed []string
+	skipped := 0
 	for _, u := range updates {
+		if u.Mismatch && skipMismatch {
+			skipped++
+			continue
+		}
 		if _, err := catalog.Apply(context.Background(), cat, env.install.AddonsPath, u, cat.Backups, env.log); err != nil {
 			fmt.Printf("✖ %s: %v\n", u.Entry.Folder, err)
 			failed = append(failed, u.Entry.Folder)
@@ -168,6 +187,9 @@ func runUpdate(args []string) error {
 		applied++
 	}
 	fmt.Printf("Update all: %d applied, %d failed.\n", applied, len(failed))
+	if skipped > 0 {
+		fmt.Printf("Skipped %d update(s) for a different game version.\n", skipped)
+	}
 	if len(failed) > 0 {
 		return fmt.Errorf("%d update(s) failed: %s", len(failed), strings.Join(failed, ", "))
 	}

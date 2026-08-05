@@ -30,7 +30,8 @@ const savedVarsUsage = `usage:
   wowfix savedvars list [--account X]
   wowfix savedvars backup [--account X] [--dest DIR]
   wowfix savedvars restore <backupPath> [--account X] [--yes]
-  wowfix savedvars reset <addon> [--account X] [--yes]`
+  wowfix savedvars reset <addon> [--account X] [--yes]
+  wowfix savedvars migrate --from <account> --to <account> [--addon <name>]`
 
 // wtfRoot returns the WTF directory of an installation: the game root
 // plus the flavor subfolder plus WTF.
@@ -298,6 +299,18 @@ func runSavedVars(args []string) error {
 	if err != nil {
 		return err
 	}
+	from, rest, err := extractFlag(rest, "--from")
+	if err != nil {
+		return err
+	}
+	to, rest, err := extractFlag(rest, "--to")
+	if err != nil {
+		return err
+	}
+	addon, rest, err := extractFlag(rest, "--addon")
+	if err != nil {
+		return err
+	}
 	opts, rest, err := parseCLIOptions(rest)
 	if err != nil {
 		return err
@@ -402,6 +415,32 @@ func runSavedVars(args []string) error {
 		fmt.Printf("Reset %s.lua for account %q\n", rest[0], acct)
 		return nil
 
+	case "migrate":
+		if from == "" || to == "" {
+			accts := m.Accounts()
+			if len(accts) == 0 {
+				return fmt.Errorf("no accounts found under %s/Account", m.Root)
+			}
+			fmt.Printf("Accounts: %s\n", strings.Join(accts, ", "))
+			return fmt.Errorf("usage: wowfix savedvars migrate --from <account> --to <account> [--addon <name>]")
+		}
+		copied, err := m.Migrate(from, to, addon)
+		if err != nil {
+			return err
+		}
+		if opts.json {
+			return printJSON(map[string]any{"from": from, "to": to, "copied": copied})
+		}
+		if len(copied) == 0 {
+			fmt.Printf("Nothing copied from %q to %q (existing files are never overwritten).\n", from, to)
+			return nil
+		}
+		fmt.Printf("Copied %d file(s) from %q to %q:\n", len(copied), from, to)
+		for _, s := range copied {
+			fmt.Printf("copied: %s.lua\n", s)
+		}
+		return nil
+
 	default:
 		return fmt.Errorf("unknown savedvars subcommand %q\n\n%s", cmd, savedVarsUsage)
 	}
@@ -418,7 +457,7 @@ func runExport(args []string) error {
 		return err
 	}
 	if len(rest) != 1 {
-		return fmt.Errorf("usage: wowfix export <out.json|out.zip> [--collection <id>] [--savedvars]")
+		return fmt.Errorf("usage: wowfix export <out.json|out.yaml|out.zip> [--collection <id>] [--savedvars]")
 	}
 	env, err := newEnvironment(opts)
 	if err != nil {
@@ -437,6 +476,10 @@ func runExport(args []string) error {
 	switch strings.ToLower(filepath.Ext(out)) {
 	case ".json":
 		if err := importexport.ExportManifest(name, env.cfg.Profile, addons, out); err != nil {
+			return err
+		}
+	case ".yaml", ".yml":
+		if err := importexport.ExportManifestYAML(name, env.cfg.Profile, addons, out); err != nil {
 			return err
 		}
 	case ".zip":
@@ -539,7 +582,7 @@ func runImport(args []string) error {
 		return err
 	}
 	if len(rest) != 1 {
-		return fmt.Errorf("usage: wowfix import <manifest.json|bundle.zip|github-list-url> [--yes]")
+		return fmt.Errorf("usage: wowfix import <manifest.json|manifest.yaml|bundle.zip|github-list-url> [--yes]")
 	}
 	env, err := newEnvironment(opts)
 	if err != nil {
@@ -561,9 +604,10 @@ func runImport(args []string) error {
 		installed, err = importexport.ImportZip(arg, env.install.AddonsPath,
 			wtfRoot(env.install.Root, env.install.Flavor), cat, nil)
 
-	case utils.Exists(arg) && strings.EqualFold(filepath.Ext(arg), ".json"):
+	case utils.Exists(arg) && (strings.EqualFold(filepath.Ext(arg), ".json") ||
+		strings.EqualFold(filepath.Ext(arg), ".yaml") || strings.EqualFold(filepath.Ext(arg), ".yml")):
 		var mf *importexport.Manifest
-		mf, err = importexport.ImportManifest(arg)
+		mf, err = importexport.ImportManifestAny(arg)
 		if err != nil {
 			return err
 		}
@@ -575,7 +619,7 @@ func runImport(args []string) error {
 		installed, err = importexport.ImportGitHubList(arg, env.install.AddonsPath, cat, nil)
 
 	default:
-		return fmt.Errorf("import requires an existing .zip or .json file, or an http(s) URL")
+		return fmt.Errorf("import requires an existing .json/.yaml/.yml or .zip file, or an http(s) URL")
 	}
 	if err != nil {
 		return err

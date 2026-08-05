@@ -12,12 +12,57 @@ import (
 	"github.com/wowfix/wowfix/internal/backup"
 	"github.com/wowfix/wowfix/internal/installer"
 	"github.com/wowfix/wowfix/internal/logger"
+	"github.com/wowfix/wowfix/internal/models"
 )
 
 // Update is one addon with a newer version available.
 type Update struct {
 	Entry  Entry
 	Latest *Addon
+	// Mismatch reports that the latest release targets a different
+	// game-version family than the configured profile. Check still
+	// reports the update; callers decide whether to skip it.
+	Mismatch bool
+}
+
+// knownGameFamilies maps the family names an addon or profile can
+// carry onto the canonical client family. Classic Era, Hardcore, SoD
+// and TurtleWoW are all vanilla-family clients.
+var knownGameFamilies = map[string]string{
+	"vanilla":  "vanilla",
+	"tbc":      "tbc",
+	"wrath":    "wrath",
+	"cata":     "cata",
+	"retail":   "retail",
+	"classic":  "vanilla",
+	"hardcore": "vanilla",
+	"sod":      "vanilla",
+	"turtle":   "vanilla",
+}
+
+// normalizeGameFamily reduces a provider game-version string to a
+// canonical client family name. Family names are mapped directly;
+// numeric version strings ("3.3.5") fall back to gameFamily. Unknown
+// or empty values map to "".
+func normalizeGameFamily(v string) string {
+	if f, ok := knownGameFamilies[strings.ToLower(strings.TrimSpace(v))]; ok {
+		return f
+	}
+	return gameFamily(v)
+}
+
+// gameFamilyMismatch reports whether an addon's game-version family
+// differs from the configured profile's family. An empty profile or an
+// unrecognized addon family means "no opinion" and returns false.
+func gameFamilyMismatch(profile *models.Profile, gameVersion string) bool {
+	if profile == nil || strings.TrimSpace(gameVersion) == "" {
+		return false
+	}
+	got := normalizeGameFamily(gameVersion)
+	if got == "" {
+		return false
+	}
+	return got != profile.Family
 }
 
 // Check compares every registry entry against its provider's latest
@@ -62,7 +107,11 @@ func Check(ctx context.Context, catalog *Catalog, reg *Registry, addonsDir strin
 			continue
 		}
 		if Compare(latest.LatestVersion, current) > 0 {
-			updates = append(updates, Update{Entry: e, Latest: latest})
+			updates = append(updates, Update{
+				Entry:    e,
+				Latest:   latest,
+				Mismatch: gameFamilyMismatch(catalog.Profile, latest.GameVersion),
+			})
 		}
 	}
 	sort.Slice(updates, func(i, j int) bool {

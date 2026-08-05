@@ -20,29 +20,31 @@ import (
 
 	"github.com/wowfix/wowfix/internal/catalog"
 	"github.com/wowfix/wowfix/internal/utils"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Manifest describes an exported addon collection.
 type Manifest struct {
-	Version     int             `json:"version"`
-	Name        string          `json:"name"`
-	GameVersion string          `json:"game_version,omitempty"`
-	Addons      []ManifestAddon `json:"addons"`
+	Version     int             `json:"version" yaml:"version"`
+	Name        string          `json:"name" yaml:"name"`
+	GameVersion string          `json:"game_version,omitempty" yaml:"game_version,omitempty"`
+	Addons      []ManifestAddon `json:"addons" yaml:"addons"`
 }
 
 // ManifestAddon is one addon entry of a manifest. Local-only addons
 // (no Provider) travel inside the bundle zip as addons/<Folder>/.
 type ManifestAddon struct {
 	// Folder is the folder name as installed.
-	Folder string `json:"folder"`
+	Folder string `json:"folder" yaml:"folder"`
 	// Provider is one of github|curseforge|wowinterface|tukui.
-	Provider string `json:"provider,omitempty"`
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
 	// ID is the provider-scoped id ("owner/repo" for github).
-	ID string `json:"id,omitempty"`
+	ID string `json:"id,omitempty" yaml:"id,omitempty"`
 	// Source is a URL form accepted by catalog.InstallFromSource.
-	Source string `json:"source,omitempty"`
+	Source string `json:"source,omitempty" yaml:"source,omitempty"`
 	// Version is the last known installed version, informational.
-	Version string `json:"version,omitempty"`
+	Version string `json:"version,omitempty" yaml:"version,omitempty"`
 }
 
 // manifestVersion is the current manifest schema version.
@@ -149,6 +151,51 @@ func ImportManifest(path string) (*Manifest, error) {
 		return nil, fmt.Errorf("manifest %q is corrupt: %w", path, err)
 	}
 	return mf, nil
+}
+
+// ExportManifestYAML writes the manifest as YAML, atomically.
+func ExportManifestYAML(name, gameVersion string, addons []ManifestAddon, outPath string) error {
+	mf := Manifest{
+		Version:     manifestVersion,
+		Name:        name,
+		GameVersion: gameVersion,
+		Addons:      addons,
+	}
+	data, err := yaml.Marshal(mf)
+	if err != nil {
+		return err
+	}
+	if len(data) == 0 || data[len(data)-1] != '\n' {
+		data = append(data, '\n')
+	}
+	tmp := outPath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, outPath); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("cannot write %q: %w", outPath, err)
+	}
+	return nil
+}
+
+// ImportManifestAny reads and parses a manifest file, dispatching on
+// extension: .yaml/.yml parse as YAML, anything else as JSON.
+func ImportManifestAny(path string) (*Manifest, error) {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".yaml", ".yml":
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("cannot read manifest %q: %w", path, err)
+		}
+		mf := &Manifest{}
+		if err := yaml.Unmarshal(data, mf); err != nil {
+			return nil, fmt.Errorf("manifest %q is corrupt: %w", path, err)
+		}
+		return mf, nil
+	default:
+		return ImportManifest(path)
+	}
 }
 
 // ImportZip installs a bundle zip: manifest.json entries with a

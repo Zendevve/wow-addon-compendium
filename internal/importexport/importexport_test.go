@@ -35,6 +35,64 @@ func TestManifestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestManifestYAMLRoundTrip(t *testing.T) {
+	mf := Manifest{
+		Version:     1,
+		Name:        "pve",
+		GameVersion: "wrath",
+		Addons: []ManifestAddon{
+			{Folder: "Questie", Provider: "github", ID: "Vendethiel/Questie", Source: "Vendethiel/Questie", Version: "1.2.3"},
+			{Folder: "LocalOnly"},
+		},
+	}
+	path := filepath.Join(t.TempDir(), "out.yaml")
+	if err := ExportManifestYAML(mf.Name, mf.GameVersion, mf.Addons, path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ImportManifestAny(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, &mf) {
+		t.Fatalf("yaml round trip mismatch:\n got %+v\nwant %+v", got, &mf)
+	}
+
+	// A .yml extension dispatches the same way.
+	ymlPath := filepath.Join(t.TempDir(), "out.yml")
+	if err := ExportManifestYAML(mf.Name, mf.GameVersion, mf.Addons, ymlPath); err != nil {
+		t.Fatal(err)
+	}
+	got, err = ImportManifestAny(ymlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, &mf) {
+		t.Fatalf("yml round trip mismatch:\n got %+v\nwant %+v", got, &mf)
+	}
+}
+
+func TestImportManifestAnyJSON(t *testing.T) {
+	mf := Manifest{
+		Version:     1,
+		Name:        "json-via-any",
+		GameVersion: "cata",
+		Addons: []ManifestAddon{
+			{Folder: "DBM", Provider: "curseforge", ID: "3358", Source: "https://www.curseforge.com/wow/addons/deadly-boss-mods", Version: "9.5.0"},
+		},
+	}
+	path := filepath.Join(t.TempDir(), "out.json")
+	if err := ExportManifest(mf.Name, mf.GameVersion, mf.Addons, path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ImportManifestAny(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, &mf) {
+		t.Fatalf("json round trip via ImportManifestAny mismatch:\n got %+v\nwant %+v", got, &mf)
+	}
+}
+
 func makeZip(t *testing.T, path string, entries map[string]string) {
 	t.Helper()
 	f, err := os.Create(path)

@@ -1256,6 +1256,11 @@ func (a *App) updateConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		no := a.confirmNo
 		if no != nil {
 			no()
+			if a.cmd != nil {
+				cmd := a.cmd
+				a.cmd = nil
+				return a, cmd
+			}
 		} else {
 			a.view = viewList
 		}

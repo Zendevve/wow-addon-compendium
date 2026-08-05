@@ -193,6 +193,69 @@ func (m *Manager) Reset(account, addon string) error {
 	return nil
 }
 
+// Migrate copies SavedVariables from one account to another within the
+// same WTF root. When addon is non-empty, only files whose stem equals
+// addon (case-insensitive) are copied; otherwise every *.lua file is.
+// Existing destination files are NOT overwritten (skip + report). Returns
+// the copied file stems. Both accounts must exist.
+func (m *Manager) Migrate(fromAccount, toAccount, addon string) ([]string, error) {
+	fromDir, err := m.savedVarsDir(fromAccount)
+	if err != nil {
+		return nil, err
+	}
+	toDir, err := m.savedVarsDir(toAccount)
+	if err != nil {
+		return nil, err
+	}
+	if !utils.IsDir(fromDir) {
+		return nil, fmt.Errorf("no SavedVariables directory for account %q (%s)", fromAccount, fromDir)
+	}
+	if !utils.IsDir(toDir) {
+		return nil, fmt.Errorf("no SavedVariables directory for account %q (%s)", toAccount, toDir)
+	}
+	entries, err := os.ReadDir(fromDir)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read SavedVariables directory %q: %w", fromDir, err)
+	}
+	var copied []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.EqualFold(filepath.Ext(name), ".lua") {
+			continue
+		}
+		stem := strings.TrimSuffix(name, filepath.Ext(name))
+		if addon != "" && !strings.EqualFold(stem, addon) {
+			continue
+		}
+		dst, err := m.underRoot(filepath.Join(toDir, name))
+		if err != nil {
+			return copied, err
+		}
+		if utils.Exists(dst) {
+			continue // never overwrite
+		}
+		src, err := m.underRoot(filepath.Join(fromDir, name))
+		if err != nil {
+			return copied, err
+		}
+		data, err := os.ReadFile(src)
+		if err != nil {
+			return copied, fmt.Errorf("cannot read %q: %w", src, err)
+		}
+		if err := os.WriteFile(dst, data, 0o644); err != nil {
+			return copied, fmt.Errorf("cannot write %q: %w", dst, err)
+		}
+		copied = append(copied, stem)
+	}
+	if m.Log != nil {
+		m.Log.Infof("Migrated SavedVariables %s -> %s: %s", fromAccount, toAccount, strings.Join(copied, ", "))
+	}
+	return copied, nil
+}
+
 // savedVarsDir validates the account name and returns the account's
 // SavedVariables directory. Account names must resolve inside
 // Root/Account.
