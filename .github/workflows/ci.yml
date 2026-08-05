@@ -6,13 +6,15 @@ on:
       - '**.go'
       - 'go.mod'
       - 'go.sum'
-      - '.github/workflows/*'
+      - '.github/**'
+      - '.gitattributes'
   pull_request:
     paths:
       - '**.go'
       - 'go.mod'
       - 'go.sum'
-      - '.github/workflows/*'
+      - '.github/**'
+      - '.gitattributes'
 
 jobs:
   test:
