@@ -1,0 +1,14 @@
+# Build artifacts
+wowfix
+wowfix.exe
+*.exe
+
+# Generated preview screenshot (regenerate with `wowfix preview`)
+preview.txt
+
+# Logs
+*.log
+
+# OS noise
+.DS_Store
+Thumbs.db
