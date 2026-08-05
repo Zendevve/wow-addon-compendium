@@ -54,6 +54,10 @@ Usage:
   wowfix doctor                 check environment and permissions
   wowfix config                 show configuration
   wowfix config set <key> <val> set a config value
+  wowfix profile                manage addon collections (list/create/switch/...)
+  wowfix savedvars              list/back up/restore/reset SavedVariables
+  wowfix export <out.json|out.zip>  export a collection [--collection <id>] [--savedvars]
+  wowfix import <file|url>      import a manifest, bundle zip or GitHub repo list
   wowfix version                print version
   wowfix preview                render a text preview of the TUI (README)
   wowfix help                   show this help
@@ -130,6 +134,14 @@ func run(args []string) error {
 		return runDoctor(rest)
 	case "config":
 		return runConfig(rest)
+	case "profile":
+		return runProfile(rest)
+	case "savedvars":
+		return runSavedVars(rest)
+	case "export":
+		return runExport(rest)
+	case "import":
+		return runImport(rest)
 	case "preview":
 		return runPreview()
 	default:
@@ -815,7 +827,7 @@ func padText(s string, width int) string {
 	return s
 }
 
-const configKeysHelp = "keys: wow_path, flavor, profile, theme, autobackup, confirmations, backups_dir, curseforge_api_key"
+const configKeysHelp = "keys: wow_path, flavor, profile, theme, autobackup, confirmations, backups_dir, curseforge_api_key, collection, collections_dir"
 
 func runConfig(args []string) error {
 	opts, rest, err := parseCLIOptions(args)
@@ -839,6 +851,8 @@ func runConfig(args []string) error {
 				"confirmations":      cfg.Confirmations,
 				"backups_dir":        cfg.BackupsDir,
 				"curseforge_api_key": cfg.CurseForgeAPIKey,
+				"collection":         cfg.Collection,
+				"collections_dir":    cfg.CollectionsDir,
 			})
 		}
 		fmt.Printf("wow_path:           %s\n", cfg.WoWPath)
@@ -849,6 +863,8 @@ func runConfig(args []string) error {
 		fmt.Printf("confirmations:      %t\n", cfg.Confirmations)
 		fmt.Printf("backups_dir:        %s\n", cfg.BackupsDir)
 		fmt.Printf("curseforge_api_key: %s\n", cfg.CurseForgeAPIKey)
+		fmt.Printf("collection:         %s\n", cfg.Collection)
+		fmt.Printf("collections_dir:    %s\n", cfg.CollectionsDir)
 		fmt.Printf("\n%s\n", configKeysHelp)
 		return nil
 	}
@@ -895,6 +911,10 @@ func setConfigValue(env *environment, key, value string) error {
 		cfg.BackupsDir = value
 	case "curseforge_api_key":
 		cfg.CurseForgeAPIKey = value
+	case "collection":
+		cfg.Collection = value
+	case "collections_dir":
+		cfg.CollectionsDir = value
 	default:
 		return fmt.Errorf("unknown key %q\n%s", key, configKeysHelp)
 	}

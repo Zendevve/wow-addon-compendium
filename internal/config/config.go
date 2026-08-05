@@ -26,6 +26,13 @@ type Config struct {
 	Flavor string `json:"flavor,omitempty"`
 	// Profile is the active game-version profile ID.
 	Profile string `json:"profile,omitempty"`
+	// Collection is the active addon-collection (profile) ID. It is
+	// named "collection" to avoid colliding with the game-version
+	// Profile field above.
+	Collection string `json:"collection,omitempty"`
+	// CollectionsDir overrides where collection files live; empty
+	// means <config dir>/collections.
+	CollectionsDir string `json:"collections_dir,omitempty"`
 	// Theme is "dark" or "light".
 	Theme string `json:"theme,omitempty"`
 	// AutoBackup snapshots folders before every mutation.

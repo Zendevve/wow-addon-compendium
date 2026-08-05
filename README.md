@@ -51,6 +51,15 @@ confirmation screens.
 - **Update manager** — catalog installs are tracked in a registry;
   `wowfix update` (or `u`/`U` in the TUI) checks every tracked addon
   against its provider and applies newer releases.
+- **Addon profiles** — capture the current addon setup as a named
+  collection (PvE/PvP/Raiding/Leveling presets) and switch between
+  them; switching renames folders to `<name>.disabled` and back
+  (`o` in the TUI).
+- **SavedVariables** — back up, restore and reset the per-account
+  `SavedVariables` files under `WTF/Account/<account>/` (`v` in the TUI).
+- **Import / Export** — share addon setups as a JSON manifest, a bundle
+  ZIP (manifest + local addon folders + SavedVariables) or a GitHub
+  repo list; importing installs through the catalog.
 - **TUI v2** — fuzzy addon filter (`/`), a help overlay (`?`), a catalog
   browser (`c`), an updates panel (`u`/`U`), install-from-source (`i`)
   and mouse-wheel scrolling throughout.
@@ -101,9 +110,8 @@ wowfix
 |-----------------|-----------------------------------|
 | `↑`/`↓` `k`/`j` | Navigate the addon list           |
 | mouse wheel     | Scroll the list / inspect / logs  |
-| `/`             | Fuzzy-filter the addon list       |
-| `?`             | Help overlay (all keybindings)    |
 | `Enter`         | Inspect the selected addon        |
+| `Esc`           | Back to the previous view         |
 | `f`             | Fix the selected addon            |
 | `a`             | Fix all detected problems         |
 | `d`             | Move the selected folder to trash |
@@ -111,12 +119,29 @@ wowfix
 | `b`             | Backup all addons                 |
 | `l` / `e`       | Logs / export logs to a file      |
 | `c`             | Open the addon catalog browser    |
+| `u` / `U`       | Updates view: update selected / update all |
 | `i`             | Install an addon from a source (URL or `owner/repo`) |
-| `u` / `U`       | Check updates / update all (updates view) |
-| `p`             | Choose game profile               |
 | `s`             | Switch WoW installation           |
+| `p`             | Choose game profile               |
+| `o` / `O`       | Manage addon collections (profiles) |
+| `v` / `V`       | SavedVariables (backup / reset)   |
+| `/`             | Fuzzy-filter the addon list       |
+| `?`             | Help overlay (all keybindings)    |
 | `t`             | Toggle dark/light theme           |
 | `q` / `Ctrl+C`  | Quit                              |
+
+Per-view extra keys (all views also take `Esc` to go back):
+
+- **Catalog** (`c`) — `↑`/`↓` move, `/` focus search, `S` cycle sort,
+  `W` cycle version filter, `d` open details, `Enter` install action.
+- **Catalog detail** (`d` in the catalog) — `↑`/`↓` scroll, `o` open
+  homepage, `g` open GitHub releases, `i` install, `Enter` back.
+- **Updates** (`u`) — `↑`/`↓` move, `u` update selected, `U` update all,
+  `Enter` open update details.
+- **Collections** (`o`) — `↑`/`↓` move, `Enter` switch (confirmed),
+  `n` create from the current setup, `d` duplicate, `r` rename, `x` delete.
+- **SavedVariables** (`v`) — `↑`/`↓` move, `Enter` cycle accounts,
+  `b` back up to the config dir, `r` reset the selected file (confirmed).
 
 The inspect screen shows the TOC compatibility table
 (expected vs detected interface per TOC), the issue list with suggested fixes,
@@ -126,26 +151,35 @@ and the target folder name.
 
 ```
 wowfix                        launch the terminal UI
-wowfix scan                   scan and report problems
-wowfix fix [--yes]            fix everything (backups first)
-wowfix install addon.zip      install an addon archive
+wowfix scan                   scan the AddOns folder and report problems
+wowfix fix [--yes]            fix all detected problems (backups first)
+wowfix install <addon.zip>    install an addon archive [--yes]
 wowfix install <url|owner/repo>  install from a provider source
-wowfix validate               TOC compatibility table
+wowfix validate               validate TOC compatibility
 wowfix list                   list addons with status
-wowfix search <query>         search GitHub/CurseForge/WowInterface/Tukui
+wowfix search <query>         search the addon catalog
 wowfix update [--yes]         check and apply addon updates
 wowfix sources                list catalog providers and their caveats
 wowfix backup                 snapshot all addons
 wowfix restore [id]           list backups, or restore one
-wowfix doctor                 environment & permission checks
-wowfix config [set k v]       show or edit configuration
+wowfix doctor                 check environment and permissions
+wowfix config [set <key> <val>]  show or edit configuration
+wowfix profile                manage addon collections (list/show/create/duplicate/
+                              rename/delete/switch/enable/disable)
+wowfix savedvars              list/back up/restore/reset SavedVariables
+wowfix export <out.json|out.zip>  export a collection [--collection <id>] [--savedvars]
+wowfix import <file|url>      import a manifest, bundle zip or GitHub repo list
 wowfix version                print version
 wowfix preview                render a text preview of the TUI
+wowfix help                   show this help
 ```
 
 Common flags: `--path <dir>` (WoW root, overrides config), `--yes` (skip
 prompts), `--json` (machine-readable output for `scan`/`list`/`validate`/
-`search`).
+`search`/`sources`/`install`/`restore`/`config`/`profile`/`savedvars`/
+`export`/`import`). Command-specific flags: `--account <name>` and
+`--dest <dir>` (`savedvars`), `--collection <id>` and `--savedvars`
+(`export`).
 
 `install` accepts a local `.zip`, a provider URL (CurseForge, WowInterface,
 Tukui, GitHub) or a GitHub `owner/repo` pair. `search` degrades gracefully
@@ -167,6 +201,8 @@ Stored at `os.UserConfigDir()/wowfix/config.json`:
 - `curseforge_api_key` — enables the modern CurseForge Core API
   (without it the catalog falls back to the deprecated legacy endpoint);
   the `WOWFIX_CURSEFORGE_API_KEY` environment variable takes precedence
+- `collection` — the active addon-collection id (set by `profile switch`)
+- `collections_dir` — where collection files live (default: `<config dir>/collections`)
 
 ```sh
 wowfix config set wow_path "D:\Games\World of Warcraft"
@@ -175,6 +211,90 @@ wowfix config set theme light
 wowfix config set curseforge_api_key "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 WOWFIX_CURSEFORGE_API_KEY=... wowfix search weakauras
 ```
+
+### Addon Profiles
+
+A profile (called "collection" in the config and CLI to avoid colliding
+with the game-version `profile` key) is a named snapshot of which addons
+are enabled. WoW disables an addon when its folder name ends in
+`.disabled`, so switching a collection renames folders between `<name>`
+and `<name>.disabled` — nothing is deleted and every switch is preceded
+by a backup snapshot.
+
+```sh
+wowfix profile create pve            # capture the current setup
+wowfix profile list                  # list collections (active marked)
+wowfix profile show pve              # per-addon enable/disable state
+wowfix profile duplicate pve raiding # copy a collection
+wowfix profile rename pve pvp        # rename (id stays stable)
+wowfix profile enable pve Questie    # flip one addon's state
+wowfix profile disable pve Dead      # ...
+wowfix profile switch pve --yes      # apply: renames folders, sets config collection
+wowfix profile delete pve
+```
+
+In the TUI press `o` for the collections view: `enter` switches (with a
+confirm dialog), `n` creates from the current state, `d`/`r` duplicate
+and rename, `x` deletes. Collections live as one `<id>.json` file per
+collection in `collections_dir` (default `<config dir>/collections`);
+ids are sanitized names, `-2`, `-3`, ... appended on collisions.
+
+### SavedVariables
+
+Addon settings live in `<wtfRoot>/Account/<account>/SavedVariables/*.lua`
+where `wtfRoot` is derived from the install (`<root>/WTF` for root
+installs, `<root>/<flavor>/WTF` for flavor subfolders).
+
+```sh
+wowfix savedvars list                        # files of the first account
+wowfix savedvars list --account "123#1"      # or an explicit account
+wowfix savedvars backup --dest D:\sv-backups # timestamped copy, prints path
+wowfix savedvars restore D:\sv-backups\2026-…  # restores; current state snapshotted first
+wowfix savedvars reset DBM                   # deletes DBM.lua (exact stem: DBM-Core.lua survives)
+```
+
+With several accounts and no `--account`, the first is used and the
+choice is announced. Restore refuses paths outside the WTF root, and
+reset matches the exact file stem so `DBM` never deletes `DBM-Core.lua`.
+In the TUI press `v`: `enter` cycles accounts, `b` backs up to the
+config dir, `r` resets the selected file (confirmed).
+
+### Import / Export
+
+A manifest is JSON describing an addon setup:
+
+```json
+{
+  "version": 1,
+  "name": "pve",
+  "game_version": "wrath",
+  "addons": [
+    {"folder": "Questie", "provider": "github", "id": "Vendethiel/Questie",
+     "source": "Vendethiel/Questie", "version": "1.2.3"},
+    {"folder": "LocalOnly"}
+  ]
+}
+```
+
+`provider`/`id`/`source` describe where to install the addon from
+(`source` is the URL form accepted by `install`); entries without a
+provider are local-only and travel inside a bundle.
+
+```sh
+wowfix export out.json                    # manifest of the current setup
+wowfix export bundle.zip --savedvars      # bundle: manifest + local addon folders + SavedVariables
+wowfix export out.json --collection pve   # export a specific collection
+wowfix import out.json                    # install remote entries; local ones are checked/skipped
+wowfix import bundle.zip                  # installs remote + local entries, restores savedvars/
+wowfix import https://gist.github.com/…/list.txt   # one "owner/repo" per line, # = comment
+```
+
+A bundle zip contains `manifest.json` at the root, local addon folders
+under `addons/<Folder>/` and SavedVariables under `savedvars/` (restored
+into the first account's SavedVariables on import). Zip entries are
+checked against path traversal before anything is extracted, and local
+addons are never silently overwritten. Importing a bundle with remote
+addons requires the catalog (`wowfix import` wires it automatically).
 
 ## Safety model
 
@@ -200,17 +320,20 @@ internal/
   fixer/             repairs: rename, flatten, merge, delete (with backups)
   installer/         ZIP extraction, normalization, install, validate
   backup/            timestamped snapshots + manifest + restore
+  profiles/          addon collections: capture, apply (.disabled renames)
+  savedvars/         SavedVariables backup/restore/reset under WTF/Account
+  importexport/      manifest/bundle/GitHub-list export & import
   detector/          WoW install discovery + PE version parsing
   config/            persisted user configuration
   logger/            ring-buffer logger with file sink + export
-  ui/                Bubble Tea TUI (list, inspect, logs, catalog, updates, dialogs)
+  ui/                Bubble Tea TUI (list, inspect, logs, catalog, updates, profiles, savedvars, dialogs)
   utils/             filesystem helpers, cross-platform trash, PE parser
 ```
 
 The core packages (scanner, validator, fixer, installer, backup, catalog,
-config) are pure business logic with no UI dependency — the CLI and the TUI
-are two thin front-ends over the same engine, so the whole feature set is
-available from both.
+config, profiles, savedvars, importexport) are pure business logic with
+no UI dependency — the CLI and the TUI are two thin front-ends over the
+same engine, so the whole feature set is available from both.
 
 ## Testing
 
@@ -239,9 +362,11 @@ without refactoring:
   registry and the updater all treat providers uniformly, so adding
   Wago, GitLab or a private source is a new file, not a rewrite.
 - **Profiles** — the profile table in `models` is the single source of truth;
-  enable/disable state per profile slots in naturally alongside `config`.
-- **Import/export** — `scan`/`list` already emit JSON; YAML/manifest exports are
-  thin serializers over `ScanResult`.
+  addon collections (enable/disable state per addon) are implemented in
+  `internal/profiles`.
+- **Import/export** — collection sharing ships as `internal/importexport`
+  (manifest, bundle zip, GitHub repo list); new formats are thin
+  serializers over the same `Manifest` type.
 - **Plugin rules** — scanner issues are plain data (`IssueKind`); new rules plug
   into `analyzeEntry` without touching the fixer.
 - **Public API** — all business logic lives in importable packages with no UI
@@ -250,10 +375,9 @@ without refactoring:
 
 ## Roadmap
 
-- Addon profiles (enable/disable sets, PvE/PvP/Raiding/Leveling presets)
-- Export/import collections (zip, manifest, JSON, YAML)
-- SavedVariables backup/reset/migration
 - Wago/other provider plugins, update filters (ignore major versions)
+- Migration of SavedVariables between accounts
+- YAML manifest export
 
 ## License
 

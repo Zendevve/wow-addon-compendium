@@ -76,6 +76,9 @@ func (r Result) String() string {
 func (f *Fixer) FixAll(ctx context.Context, addons []*models.Addon) []Result {
 	var results []Result
 	for _, a := range addons {
+		if strings.HasSuffix(strings.ToLower(a.FolderName), ".disabled") {
+			continue // disabled addons are not fix targets
+		}
 		if ctx.Err() != nil {
 			results = append(results, Result{Addon: a.FolderName, Action: "fix-all", Message: "cancelled"})
 			break

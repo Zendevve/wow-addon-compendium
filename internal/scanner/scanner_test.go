@@ -305,16 +305,52 @@ func TestScanSortsErrorsFirst(t *testing.T) {
 	}
 }
 
+func TestScanDisabledFolderSkipped(t *testing.T) {
+	s, dir := newTestScanner(t)
+	writeAddon(t, dir, "Questie.disabled", map[string]string{
+		"Questie.toc": "## Interface: 30300\n## Title: Questie\n",
+	}, nil)
+	// The suffix check is case-insensitive.
+	writeAddon(t, dir, "Alerts.DISABLED", map[string]string{
+		"Alerts.toc": "## Interface: 30300\n## Title: Alerts\n",
+	}, nil)
+	res := scan(t, s)
+	if len(res.Addons) != 0 {
+		t.Fatalf("disabled folders must be skipped, got %d addons: %v",
+			len(res.Addons), res.Addons)
+	}
+	if len(res.Errors) != 0 {
+		t.Fatalf("disabled folders must not produce errors: %v", res.Errors)
+	}
+}
+
+func TestScanDisabledSiblingStillScanned(t *testing.T) {
+	s, dir := newTestScanner(t)
+	writeAddon(t, dir, "Questie", map[string]string{
+		"Questie.toc": "## Interface: 30300\n## Title: Questie\n",
+	}, nil)
+	writeAddon(t, dir, "Questie.disabled", map[string]string{
+		"Questie.toc": "## Interface: 30300\n## Title: Questie\n",
+	}, nil)
+	res := scan(t, s)
+	if len(res.Addons) != 1 {
+		t.Fatalf("only the enabled sibling should be scanned, got %d: %v",
+			len(res.Addons), res.Addons)
+	}
+	findAddon(t, res, "Questie")
+}
+
 func TestDiscoverFindsAddonUnits(t *testing.T) {
 	s, dir := newTestScanner(t)
 	writeAddon(t, dir, "Clean", map[string]string{"Clean.toc": "## Interface: 30300\n"}, nil)
 	writeAddon(t, dir, "Zip-main", map[string]string{"Zip.toc": "## Interface: 30300\n"}, nil)
+	writeAddon(t, dir, "Old.disabled", map[string]string{"Old.toc": "## Interface: 30300\n"}, nil)
 
 	addons, errs := s.Discover(context.Background())
 	if len(errs) != 0 {
 		t.Fatalf("unexpected discover errors: %v", errs)
 	}
 	if len(addons) != 2 {
-		t.Fatalf("expected 2 addon units, got %d", len(addons))
+		t.Fatalf("expected 2 addon units (disabled folder skipped), got %d", len(addons))
 	}
 }

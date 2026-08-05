@@ -446,10 +446,18 @@ func (a *App) helpGroups() []helpGroup {
 		group("Views",
 			a.keys.Logs, a.keys.Profile, a.keys.Theme, a.keys.Install,
 			a.keys.Filter, a.keys.Help, a.keys.Quit),
+		group("Collections",
+			a.keys.Profiles, a.keys.SavedVars),
 		group("Catalog",
 			a.keys.Catalog, a.keys.Updates, a.keys.Source,
 			key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "update all (updates view)")),
 			key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search (catalog view)")),
+			key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "sort results (catalog view)")),
+			key.NewBinding(key.WithKeys("W"), key.WithHelp("W", "filter by game version (catalog view)")),
+			key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "addon details (catalog view)")),
+			key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open homepage (detail view)")),
+			key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "GitHub releases (detail view)")),
+			key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "install (detail view)")),
 			a.keys.Enter),
 	}
 }

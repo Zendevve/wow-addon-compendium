@@ -12,3 +12,8 @@ preview.txt
 # OS noise
 .DS_Store
 Thumbs.db
+
+# Backups and runtime artifacts
+/Backups/
+savedvars-backups/
+*.backup

@@ -1,9 +1,14 @@
 package ui
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -27,6 +32,22 @@ var (
 	minSearchInterval   = time.Second
 )
 
+// httpClient is the client used for out-of-band UI fetches such as
+// GitHub release notes. It is a package-level variable so tests can
+// substitute a stub.
+var httpClient = &http.Client{}
+
+// Catalog sort modes, cycled with S in the catalog view.
+const (
+	catalogSortName     = "name"
+	catalogSortUpdated  = "updated"
+	catalogSortProvider = "provider"
+)
+
+// catalogFilterOrder is the game-version family cycle driven by W in the
+// catalog view. "" is "all" and matches every addon.
+var catalogFilterOrder = []string{"", "vanilla", "tbc", "wrath", "cata", "retail"}
+
 type catalogSearchMsg struct {
 	query   string
 	results []*catalog.Addon
@@ -36,6 +57,22 @@ type catalogSearchMsg struct {
 // searchDebounceMsg is delivered when the search box has been quiet for
 // searchDebounceDelay.
 type searchDebounceMsg struct{}
+
+// releaseNotesMsg carries the body of a GitHub latest-release fetched for
+// the catalog detail view.
+type releaseNotesMsg struct {
+	id   string
+	text string
+	err  error
+}
+
+// releaseNotesResult is the per-addon cache entry for release notes; a
+// failed or empty fetch is cached as unavailable so the rate-limited
+// GitHub API is never re-polled within a session.
+type releaseNotesResult struct {
+	text string
+	ok   bool
+}
 
 type installDoneMsg struct {
 	names []string
@@ -108,6 +145,57 @@ func (a *App) cancelSearchDebounce() {
 		a.searchCancel = nil
 	}
 	a.searchPending = false
+}
+
+// releaseNotesCmd lazily fetches the latest GitHub release notes for a
+// github-provider addon. The result is cached per addon ID so opening
+// the detail view twice never re-fetches (GitHub's unauthenticated API
+// is rate limited). Non-github addons and unparseable IDs return no
+// command; failures are cached as unavailable.
+func (a *App) releaseNotesCmd(addon *catalog.Addon) tea.Cmd {
+	if !isGitHubRepo(addon) {
+		return nil
+	}
+	if _, ok := a.releaseNotes[addon.ID]; ok {
+		return nil
+	}
+	parts := strings.SplitN(addon.ID, "/", 2)
+	owner, repo := parts[0], parts[1]
+	return func() tea.Msg {
+		req, err := http.NewRequestWithContext(a.ctx, http.MethodGet,
+			"https://api.github.com/repos/"+owner+"/"+repo+"/releases/latest", nil)
+		if err != nil {
+			return releaseNotesMsg{id: addon.ID, err: err}
+		}
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("User-Agent", "wowfix")
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return releaseNotesMsg{id: addon.ID, err: err}
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if err != nil {
+			return releaseNotesMsg{id: addon.ID, err: err}
+		}
+		var rel struct {
+			Body string `json:"body"`
+		}
+		if err := json.Unmarshal(body, &rel); err != nil {
+			return releaseNotesMsg{id: addon.ID, err: err}
+		}
+		return releaseNotesMsg{id: addon.ID, text: stripMarkdown(rel.Body)}
+	}
+}
+
+// isGitHubRepo reports whether the addon is github-sourced with an ID
+// that parses as owner/repo.
+func isGitHubRepo(addon *catalog.Addon) bool {
+	if addon == nil || addon.Provider != catalog.ProviderGitHub {
+		return false
+	}
+	parts := strings.SplitN(addon.ID, "/", 2)
+	return len(parts) == 2 && parts[0] != "" && parts[1] != ""
 }
 
 // fireSearch runs the provider search for the current box value now,
@@ -286,11 +374,25 @@ func (a *App) updateCatalogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, a.keys.Filter):
 		a.search.Focus()
 		return a, textinput.Blink
-	case key.Matches(msg, a.keys.Enter):
-		if len(a.results) == 0 || a.resultCur >= len(a.results) {
+	case key.Matches(msg, key.NewBinding(key.WithKeys("S"))):
+		a.cycleCatalogSort()
+		a.clampCatalogCursor()
+	case key.Matches(msg, key.NewBinding(key.WithKeys("W"))):
+		a.cycleCatalogFilter()
+		a.clampCatalogCursor()
+	case key.Matches(msg, key.NewBinding(key.WithKeys("d"))):
+		addon := a.catalogResultAt()
+		if addon == nil {
 			return a, nil
 		}
-		a.openCatalogAction(a.results[a.resultCur])
+		a.openCatalogDetail(addon)
+		return a, a.releaseNotesCmd(addon)
+	case key.Matches(msg, a.keys.Enter):
+		addon := a.catalogResultAt()
+		if addon == nil {
+			return a, nil
+		}
+		a.openCatalogAction(addon)
 		return a, nil
 	case key.Matches(msg, a.keys.Escape):
 		a.cancelSearchDebounce()
@@ -302,15 +404,12 @@ func (a *App) updateCatalogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (a *App) openCatalogAction(addon *catalog.Addon) {
 	a.actionAddon = addon
-	a.actionChoices = []string{"Install", "Open homepage"}
+	a.actionChoices = []string{"Install", "Open homepage", "View details"}
 	a.actionCursor = 0
 	a.actionCallback = func(choice string) {
 		switch choice {
 		case "Install":
-			source := addon.Homepage
-			if source == "" && addon.Provider == catalog.ProviderGitHub {
-				source = addon.ID // "owner/repo"
-			}
+			source := installSourceFor(addon)
 			if source == "" {
 				a.pushToast("No install source available for " + addon.Name)
 				return
@@ -327,9 +426,165 @@ func (a *App) openCatalogAction(addon *catalog.Addon) {
 				return
 			}
 			a.pushToast("Opened " + addon.Homepage)
+		case "View details":
+			a.openCatalogDetail(addon)
+			a.cmd = a.releaseNotesCmd(addon)
 		}
 	}
 	a.view = viewCatalogAction
+}
+
+// installSourceFor resolves the install source for an addon: the
+// homepage when known, else the provider-scoped id for GitHub.
+func installSourceFor(addon *catalog.Addon) string {
+	if addon.Homepage != "" {
+		return addon.Homepage
+	}
+	if addon.Provider == catalog.ProviderGitHub {
+		return addon.ID
+	}
+	return ""
+}
+
+// openCatalogDetail switches to the catalog detail view.
+func (a *App) openCatalogDetail(addon *catalog.Addon) {
+	a.detailAddon = addon
+	a.detailOffset = 0
+	a.view = viewCatalogDetail
+}
+
+func (a *App) updateCatalogDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	addon := a.detailAddon
+	switch {
+	case key.Matches(msg, a.keys.Escape), key.Matches(msg, a.keys.Enter):
+		a.view = viewCatalog
+		a.detailAddon = nil
+		return a, nil
+	case key.Matches(msg, a.keys.Up):
+		a.detailOffset = maxInt(0, a.detailOffset-1)
+	case key.Matches(msg, a.keys.Down):
+		a.detailOffset++
+	case key.Matches(msg, key.NewBinding(key.WithKeys("o"))):
+		if addon == nil || addon.Homepage == "" {
+			if addon != nil {
+				a.pushToast("No homepage for " + addon.Name)
+			}
+			return a, nil
+		}
+		if err := openURL(addon.Homepage); err != nil {
+			a.pushToast("Could not open browser: " + err.Error())
+			return a, nil
+		}
+		a.pushToast("Opened " + addon.Homepage)
+	case key.Matches(msg, key.NewBinding(key.WithKeys("g"))):
+		if !isGitHubRepo(addon) {
+			return a, nil
+		}
+		u := "https://github.com/" + addon.ID + "/releases"
+		if err := openURL(u); err != nil {
+			a.pushToast("Could not open browser: " + err.Error())
+			return a, nil
+		}
+		a.pushToast("Opened " + u)
+	case key.Matches(msg, key.NewBinding(key.WithKeys("i"))):
+		if addon == nil {
+			return a, nil
+		}
+		source := installSourceFor(addon)
+		if source == "" {
+			a.pushToast("No install source available for " + addon.Name)
+			return a, nil
+		}
+		if a.install == nil {
+			a.pushToast("No installation selected")
+			return a, nil
+		}
+		a.view = viewCatalog
+		a.detailAddon = nil
+		a.beginInstall(addon.Name)
+		return a, a.installCmd(source)
+	}
+	return a, nil
+}
+
+// catalogRows returns the displayed catalog results: the message slice
+// filtered by the active version filter and sorted by the active sort
+// mode. The returned slice is a copy — the message slice is never
+// mutated.
+func (a *App) catalogRows() []*catalog.Addon {
+	out := make([]*catalog.Addon, 0, len(a.results))
+	for _, r := range a.results {
+		if a.catalogFilter != "" && r.GameVersion != a.catalogFilter {
+			continue
+		}
+		out = append(out, r)
+	}
+	switch a.catalogSort {
+	case catalogSortUpdated:
+		sort.SliceStable(out, func(i, j int) bool {
+			return out[i].UpdatedAt.After(out[j].UpdatedAt)
+		})
+	case catalogSortProvider:
+		sort.SliceStable(out, func(i, j int) bool {
+			if out[i].Provider != out[j].Provider {
+				return out[i].Provider < out[j].Provider
+			}
+			return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+		})
+	default:
+		sort.SliceStable(out, func(i, j int) bool {
+			return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+		})
+	}
+	return out
+}
+
+// catalogResultAt returns the addon under the catalog cursor in the
+// displayed (sorted/filtered) order, or nil.
+func (a *App) catalogResultAt() *catalog.Addon {
+	rows := a.catalogRows()
+	if a.resultCur < 0 || a.resultCur >= len(rows) {
+		return nil
+	}
+	return rows[a.resultCur]
+}
+
+// clampCatalogCursor keeps the catalog cursor inside the displayed rows.
+func (a *App) clampCatalogCursor() {
+	n := len(a.catalogRows())
+	if n == 0 {
+		a.resultCur = 0
+		return
+	}
+	if a.resultCur >= n {
+		a.resultCur = n - 1
+	}
+}
+
+// cycleCatalogSort advances the catalog sort mode: name -> updated ->
+// provider -> name.
+func (a *App) cycleCatalogSort() {
+	switch a.catalogSort {
+	case catalogSortUpdated:
+		a.catalogSort = catalogSortProvider
+	case catalogSortProvider:
+		a.catalogSort = catalogSortName
+	default:
+		a.catalogSort = catalogSortUpdated
+	}
+}
+
+// cycleCatalogFilter advances the game-version filter: all -> vanilla ->
+// tbc -> wrath -> cata -> retail -> all. Empty GameVersion rows match
+// only under "all".
+func (a *App) cycleCatalogFilter() {
+	for i, f := range catalogFilterOrder {
+		if f == a.catalogFilter {
+			a.catalogFilter = catalogFilterOrder[(i+1)%len(catalogFilterOrder)]
+			return
+		}
+	}
+	a.catalogFilter = ""
 }
 
 func (a *App) updateCatalogActionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -449,13 +704,78 @@ func providerTag(name string) string {
 	return "?"
 }
 
+// relTime renders a timestamp as a short relative string: "just now",
+// "Nm", "Nh", "Nd", or the absolute date once older than 90 days.
+func relTime(t time.Time) string {
+	if t.IsZero() {
+		return "—"
+	}
+	d := time.Since(t)
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d/time.Minute))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d/time.Hour))
+	case d < 90*24*time.Hour:
+		return fmt.Sprintf("%dd", int(d/(24*time.Hour)))
+	default:
+		return t.Format("2006-01-02")
+	}
+}
+
+// Markdown stripdown regexes, applied in order by stripMarkdown. The
+// line-anchored ones use [ \t] for leading whitespace so they never
+// consume blank-line newlines before the marker.
+var (
+	mdImageRe  = regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)`)
+	mdFenceRe  = regexp.MustCompile("(?ms)```.*?```")
+	mdInlineRe = regexp.MustCompile("`([^`]*)`")
+	mdLinkRe   = regexp.MustCompile(`\[([^\]]*)\]\(([^)]*)\)`)
+	mdBoldRe   = regexp.MustCompile(`\*\*([^*]+)\*\*`)
+	mdItalicRe = regexp.MustCompile(`\*([^*]+)\*`)
+	mdStrikeRe = regexp.MustCompile(`~~([^~]+)~~`)
+	mdHeaderRe = regexp.MustCompile(`(?m)^[ \t]{0,3}#{1,6}[ \t]*`)
+	mdQuoteRe  = regexp.MustCompile(`(?m)^[ \t]*>[ \t]?`)
+	mdBulletRe = regexp.MustCompile(`(?m)^[ \t]*[-*+][ \t]+`)
+	mdRuleRe   = regexp.MustCompile(`(?m)^[ \t]*[-*_]{3,}[ \t]*$`)
+	mdBlankRe  = regexp.MustCompile(`\n{3,}`)
+)
+
+// stripMarkdown reduces a GitHub release body to plain text: code
+// fences and images are removed, inline formatting is unwrapped, links
+// keep their URL, and header/quote/list markers are dropped.
+func stripMarkdown(s string) string {
+	s = mdImageRe.ReplaceAllString(s, "")
+	s = mdFenceRe.ReplaceAllString(s, "")
+	s = mdInlineRe.ReplaceAllString(s, "$1")
+	s = mdLinkRe.ReplaceAllString(s, "$2")
+	s = mdBoldRe.ReplaceAllString(s, "$1")
+	s = mdItalicRe.ReplaceAllString(s, "$1")
+	s = mdStrikeRe.ReplaceAllString(s, "$1")
+	s = mdHeaderRe.ReplaceAllString(s, "")
+	s = mdQuoteRe.ReplaceAllString(s, "")
+	s = mdBulletRe.ReplaceAllString(s, "")
+	s = mdRuleRe.ReplaceAllString(s, "")
+	s = mdBlankRe.ReplaceAllString(s, "\n\n")
+	return strings.TrimSpace(s)
+}
+
 func (a *App) renderCatalog() string {
 	width := a.width - 4
 	if width < 60 {
 		width = 60
 	}
 	var b strings.Builder
-	b.WriteString(a.styles.Section.Render("Catalog"))
+	head := "Catalog · sort: " + a.catalogSort
+	if a.catalogFilter != "" {
+		head += " · filter: " + a.catalogFilter
+	}
+	b.WriteString(a.styles.Section.Render(head))
 	b.WriteString("\n")
 	b.WriteString(a.styles.FilterBar.Render(a.search.View()))
 	b.WriteString("\n")
@@ -464,25 +784,30 @@ func (a *App) renderCatalog() string {
 		b.WriteString(a.styles.Hint.Render("Catalog unavailable: " + a.catErr.Error()))
 	} else if a.searchPending || a.searching {
 		b.WriteString(a.styles.Hint.Render(a.spinner.View() + " searching…"))
-	} else if len(a.results) == 0 {
+	} else if len(a.catalogRows()) == 0 {
 		if a.search.Value() == "" {
 			b.WriteString(a.styles.Hint.Render(
 				"Type to search GitHub, CurseForge, WowInterface and Tukui."))
+		} else if a.catalogFilter != "" {
+			b.WriteString(a.styles.Hint.Render(fmt.Sprintf(
+				"No %s addons match %q", a.catalogFilter, a.search.Value())))
 		} else {
 			b.WriteString(a.styles.Hint.Render(fmt.Sprintf("No results for %q", a.search.Value())))
 		}
 	} else {
-		rows := a.visibleRows()
+		rows := a.catalogRows()
+		vis := a.visibleRows()
 		start := 0
-		if a.resultCur >= rows {
-			start = a.resultCur - rows + 1
+		if a.resultCur >= vis {
+			start = a.resultCur - vis + 1
 		}
-		end := start + rows
-		if end > len(a.results) {
-			end = len(a.results)
+		end := start + vis
+		if end > len(rows) {
+			end = len(rows)
 		}
+		updatedW := 10
 		for i := start; i < end; i++ {
-			r := a.results[i]
+			r := rows[i]
 			mark := " "
 			if i == a.resultCur {
 				mark = "▸"
@@ -491,10 +816,19 @@ func (a *App) renderCatalog() string {
 			if r.Author != "" {
 				name += "  by " + r.Author
 			}
-			line := fmt.Sprintf("%s %s [%s]", mark, name, providerTag(r.Provider))
+			prefix := fmt.Sprintf("%s %s [%s]", mark, name, providerTag(r.Provider))
 			if r.LatestVersion != "" {
-				line += "  v" + r.LatestVersion
+				prefix += "  v" + r.LatestVersion
 			}
+			// The summary column takes whatever width remains and clamps
+			// at a minimum, mirroring the PROBLEM column in the main list.
+			summaryW := width - lipgloss.Width(prefix) - updatedW - 3
+			if summaryW < 12 {
+				summaryW = 12
+			}
+			summary := strings.ReplaceAll(r.Summary, "\n", " ")
+			line := fmt.Sprintf("%s %s %s",
+				prefix, pad(relTime(r.UpdatedAt), updatedW), truncate(summary, summaryW))
 			if i == a.resultCur {
 				b.WriteString(a.styles.RowSelected.Render(pad(line, width)))
 			} else {
@@ -502,13 +836,111 @@ func (a *App) renderCatalog() string {
 			}
 			b.WriteString("\n")
 		}
-		if len(a.results) > end {
-			b.WriteString(a.styles.RowMuted.Render(fmt.Sprintf("… %d more", len(a.results)-end)))
+		if len(rows) > end {
+			b.WriteString(a.styles.RowMuted.Render(fmt.Sprintf("… %d more", len(rows)-end)))
 			b.WriteString("\n")
 		}
 	}
-	b.WriteString("\n" + a.styles.Hint.Render("/ search · enter open · esc back · q quit"))
+	b.WriteString("\n" + a.styles.Hint.Render(
+		"/ search · S sort · W filter · enter open · d details · esc back · q quit"))
 	return a.styles.ListBox.Width(width + 2).Render(b.String())
+}
+
+// renderCatalogDetail draws the addon detail panel: metadata plus, for
+// github addons, the lazily fetched release notes.
+func (a *App) renderCatalogDetail() string {
+	addon := a.detailAddon
+	if addon == nil {
+		return ""
+	}
+	width := a.width - 8
+	if width < 50 {
+		width = 50
+	}
+	contentW := width - 6 // dialog border + padding
+	if contentW < 40 {
+		contentW = 40
+	}
+	wrap := lipgloss.NewStyle().Width(contentW)
+
+	var lines []string
+	lines = append(lines, a.styles.Section.Render(addon.Name))
+	lines = append(lines, "")
+	lines = append(lines, a.styles.Detail.Render("Provider: ")+a.styles.Path.Render(addon.Provider))
+	if addon.ID != "" {
+		lines = append(lines, a.styles.Detail.Render("ID: ")+a.styles.Path.Render(addon.ID))
+	}
+	if addon.Author != "" {
+		lines = append(lines, a.styles.Detail.Render("Author: ")+a.styles.Path.Render(addon.Author))
+	}
+	if addon.Summary != "" {
+		lines = append(lines, "", a.styles.Detail.Render(wrap.Render(addon.Summary)))
+	}
+	if addon.LatestVersion != "" {
+		lines = append(lines, "", a.styles.Detail.Render("Latest version: ")+
+			a.styles.Path.Render(addon.LatestVersion))
+	}
+	if addon.GameVersion != "" {
+		lines = append(lines, a.styles.Detail.Render("Game version: ")+
+			a.styles.Path.Render(addon.GameVersion))
+	}
+	if !addon.UpdatedAt.IsZero() {
+		lines = append(lines, a.styles.Detail.Render("Updated: ")+
+			a.styles.Path.Render(addon.UpdatedAt.Format("2006-01-02 15:04")))
+	}
+	if addon.Homepage != "" {
+		lines = append(lines, "", a.styles.Detail.Render("Homepage: ")+
+			a.styles.Path.Render(addon.Homepage))
+	}
+	if isGitHubRepo(addon) {
+		lines = append(lines, "", a.styles.Section.Render("Release notes"))
+		if rn, ok := a.releaseNotes[addon.ID]; ok {
+			if rn.ok {
+				lines = append(lines, a.releaseNotesLines(rn.text, wrap)...)
+			} else {
+				lines = append(lines, a.styles.RowMuted.Render("Release notes unavailable"))
+			}
+		} else {
+			lines = append(lines, a.styles.RowMuted.Render("Loading release notes…"))
+		}
+	}
+
+	rows := a.height - 8
+	if rows < 5 {
+		rows = 5
+	}
+	if len(lines) > rows {
+		start := a.detailOffset
+		if start > len(lines)-rows {
+			start = len(lines) - rows
+		}
+		if start < 0 {
+			start = 0
+		}
+		lines = lines[start : start+rows]
+	}
+	body := strings.Join(lines, "\n")
+	body += "\n\n" + a.styles.Hint.Render(
+		"enter/esc back · o homepage · g releases · i install · ↑/↓ scroll")
+	panel := a.styles.Dialog.Width(width).Render(body)
+	return lipgloss.Place(a.width, a.height-3, lipgloss.Center, lipgloss.Center, panel)
+}
+
+// releaseNotesLines wraps release-note paragraphs to the content width,
+// one styled line per wrapped row.
+func (a *App) releaseNotesLines(text string, wrap lipgloss.Style) []string {
+	var out []string
+	for _, para := range strings.Split(text, "\n\n") {
+		para = strings.TrimSpace(para)
+		if para == "" {
+			continue
+		}
+		for _, ln := range strings.Split(wrap.Render(para), "\n") {
+			out = append(out, a.styles.RowMuted.Render(ln))
+		}
+		out = append(out, "")
+	}
+	return out
 }
 
 func (a *App) renderCatalogAction() string {

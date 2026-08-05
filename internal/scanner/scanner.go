@@ -64,6 +64,9 @@ func (s *Scanner) Scan(ctx context.Context) (*models.ScanResult, error) {
 		if strings.HasPrefix(name, ".") {
 			continue // hidden folders (.DS_Store, .git, ...) are noise
 		}
+		if strings.HasSuffix(strings.ToLower(name), ".disabled") {
+			continue // intentionally disabled addons are not scan targets
+		}
 		addon, err := s.analyzeEntry(ctx, filepath.Join(s.AddonsDir, name), name)
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Errorf("%s: %w", name, err))
@@ -94,6 +97,9 @@ func (s *Scanner) Discover(ctx context.Context) ([]*models.Addon, []error) {
 		}
 		if !entry.IsDir() {
 			continue
+		}
+		if strings.HasSuffix(strings.ToLower(entry.Name()), ".disabled") {
+			continue // intentionally disabled addons are not scan targets
 		}
 		found, err := s.analyzeEntry(ctx, filepath.Join(s.AddonsDir, entry.Name()), entry.Name())
 		if err != nil {

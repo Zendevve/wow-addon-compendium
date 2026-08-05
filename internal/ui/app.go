@@ -25,6 +25,7 @@ import (
 	"github.com/wowfix/wowfix/internal/fixer"
 	"github.com/wowfix/wowfix/internal/logger"
 	"github.com/wowfix/wowfix/internal/models"
+	"github.com/wowfix/wowfix/internal/profiles"
 	"github.com/wowfix/wowfix/internal/scanner"
 	"github.com/wowfix/wowfix/internal/utils"
 )
@@ -34,58 +35,62 @@ var Version = "dev"
 
 // keyMap holds every key binding.
 type keyMap struct {
-	Up       key.Binding
-	Down     key.Binding
-	Enter    key.Binding
-	Escape   key.Binding
-	Fix      key.Binding
-	FixAll   key.Binding
-	Delete   key.Binding
-	Rescan   key.Binding
-	Backup   key.Binding
-	Logs     key.Binding
-	Export   key.Binding
-	Install  key.Binding
-	Profile  key.Binding
-	Theme    key.Binding
-	Filter   key.Binding
-	Help     key.Binding
-	Catalog  key.Binding
-	Updates  key.Binding
-	Source   key.Binding
-	Quit     key.Binding
-	Yes      key.Binding
-	No       key.Binding
-	ScrollUp key.Binding
-	ScrollDn key.Binding
+	Up        key.Binding
+	Down      key.Binding
+	Enter     key.Binding
+	Escape    key.Binding
+	Fix       key.Binding
+	FixAll    key.Binding
+	Delete    key.Binding
+	Rescan    key.Binding
+	Backup    key.Binding
+	Logs      key.Binding
+	Export    key.Binding
+	Install   key.Binding
+	Profile   key.Binding
+	Theme     key.Binding
+	Filter    key.Binding
+	Help      key.Binding
+	Catalog   key.Binding
+	Updates   key.Binding
+	Source    key.Binding
+	Profiles  key.Binding
+	SavedVars key.Binding
+	Quit      key.Binding
+	Yes       key.Binding
+	No        key.Binding
+	ScrollUp  key.Binding
+	ScrollDn  key.Binding
 }
 
 func defaultKeys() keyMap {
 	return keyMap{
-		Up:       key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
-		Down:     key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
-		Enter:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "inspect")),
-		Escape:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-		Fix:      key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "fix")),
-		FixAll:   key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "fix all")),
-		Delete:   key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "trash")),
-		Rescan:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rescan")),
-		Backup:   key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "backup")),
-		Logs:     key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "logs")),
-		Export:   key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "export logs")),
-		Profile:  key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "profile")),
-		Theme:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-		Filter:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
-		Help:     key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
-		Catalog:  key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "catalog")),
-		Updates:  key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "updates")),
-		Source:   key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "install from source")),
-		Install:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "switch install")),
-		Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
-		Yes:      key.NewBinding(key.WithKeys("y", "enter")),
-		No:       key.NewBinding(key.WithKeys("n", "esc")),
-		ScrollUp: key.NewBinding(key.WithKeys("up", "k", "pgup")),
-		ScrollDn: key.NewBinding(key.WithKeys("down", "j", "pgdn")),
+		Up:        key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+		Down:      key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+		Enter:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "inspect")),
+		Escape:    key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
+		Fix:       key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "fix")),
+		FixAll:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "fix all")),
+		Delete:    key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "trash")),
+		Rescan:    key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rescan")),
+		Backup:    key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "backup")),
+		Logs:      key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "logs")),
+		Export:    key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "export logs")),
+		Profile:   key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "profile")),
+		Theme:     key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
+		Filter:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+		Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
+		Catalog:   key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "catalog")),
+		Updates:   key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "updates")),
+		Source:    key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "install from source")),
+		Install:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "switch install")),
+		Profiles:  key.NewBinding(key.WithKeys("o", "O"), key.WithHelp("O", "profiles")),
+		SavedVars: key.NewBinding(key.WithKeys("v", "V"), key.WithHelp("V", "savedvars")),
+		Quit:      key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+		Yes:       key.NewBinding(key.WithKeys("y", "enter")),
+		No:        key.NewBinding(key.WithKeys("n", "esc")),
+		ScrollUp:  key.NewBinding(key.WithKeys("up", "k", "pgup")),
+		ScrollDn:  key.NewBinding(key.WithKeys("down", "j", "pgdn")),
 	}
 }
 
@@ -103,8 +108,11 @@ const (
 	viewHelp
 	viewCatalog
 	viewCatalogAction
+	viewCatalogDetail
 	viewUpdates
 	viewUpdatesDetail
+	viewProfiles
+	viewSavedVars
 )
 
 // inputKind selects what the shared manual input prompt is asking for.
@@ -113,6 +121,9 @@ type inputKind int
 const (
 	inputPath inputKind = iota
 	inputSource
+	inputProfileCreate
+	inputProfileDuplicate
+	inputProfileRename
 )
 
 // --- messages ---------------------------------------------------------
@@ -211,6 +222,18 @@ type App struct {
 	results   []*catalog.Addon
 	resultCur int
 
+	// catalog sort/filter toggles (S and W in the catalog view).
+	// catalogSort cycles name -> updated -> provider; catalogFilter
+	// cycles the game-version family, "" meaning all.
+	catalogSort   string
+	catalogFilter string
+
+	// catalog detail view; releaseNotes caches GitHub release notes per
+	// addon ID so the rate-limited API is never re-polled.
+	detailAddon  *catalog.Addon
+	detailOffset int
+	releaseNotes map[string]releaseNotesResult
+
 	// catalog search debounce/rate limiting. searchCancel aborts the
 	// pending debounce timer; searchPending/searching drive the
 	// "searching…" hint; lastSearchAt enforces the per-session minimum
@@ -272,6 +295,19 @@ type App struct {
 	tocChoices  []string
 	tocCursor   int
 	tocCallback func(choice string)
+
+	// addon-collections view state
+	profiles       []profiles.Collection
+	profilesCursor int
+	profilesOffset int
+	inputProfileID string
+
+	// SavedVariables view state
+	svAccounts []string
+	svAccount  string
+	svFiles    []string
+	svCursor   int
+	svOffset   int
 }
 
 // NewApp wires the model with services.
@@ -315,22 +351,24 @@ func NewApp(cfg *config.Config, store *config.Store, log *logger.Logger) *App {
 	}
 
 	return &App{
-		ctx:      ctx,
-		cancel:   cancel,
-		cfg:      cfg,
-		store:    store,
-		log:      log,
-		keys:     defaultKeys(),
-		theme:    theme,
-		styles:   NewStyles(theme),
-		spinner:  sp,
-		input:    input,
-		filter:   filter,
-		search:   search,
-		catalog:  cat,
-		registry: reg,
-		catErr:   catErr,
-		profile:  models.ProfileByID(cfg.Profile),
+		ctx:          ctx,
+		cancel:       cancel,
+		cfg:          cfg,
+		store:        store,
+		log:          log,
+		keys:         defaultKeys(),
+		theme:        theme,
+		styles:       NewStyles(theme),
+		spinner:      sp,
+		input:        input,
+		filter:       filter,
+		search:       search,
+		catalog:      cat,
+		registry:     reg,
+		catErr:       catErr,
+		profile:      models.ProfileByID(cfg.Profile),
+		catalogSort:  catalogSortName,
+		releaseNotes: map[string]releaseNotesResult{},
 	}
 }
 
@@ -746,6 +784,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The quiet period elapsed: run the search (rate limit applied).
 		return a, a.fireSearch()
 
+	case releaseNotesMsg:
+		a.releaseNotes[m.id] = releaseNotesResult{text: m.text, ok: m.err == nil && m.text != ""}
+		return a, nil
+
 	case installDoneMsg:
 		a.busy = false
 		a.installRunning = false
@@ -802,6 +844,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case busyDoneMsg:
 		a.busy = false
 		return a, nil
+
+	case svBackupMsg:
+		a.busy = false
+		if m.err != nil {
+			a.pushToast("SavedVariables backup failed: " + m.err.Error())
+		} else {
+			a.pushToast("SavedVariables backed up to " + m.path)
+		}
+		return a, nil
 	}
 
 	return a, tea.Batch(cmds...)
@@ -848,10 +899,16 @@ func (a *App) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.updateCatalogKey(msg)
 	case viewCatalogAction:
 		return a.updateCatalogActionKey(msg)
+	case viewCatalogDetail:
+		return a.updateCatalogDetailKey(msg)
 	case viewUpdates:
 		return a.updateUpdatesKey(msg)
 	case viewUpdatesDetail:
 		return a.updateUpdatesDetailKey(msg)
+	case viewProfiles:
+		return a.updateProfilesKey(msg)
+	case viewSavedVars:
+		return a.updateSavedVarsKey(msg)
 	default:
 		return a.updateListKey(msg)
 	}
@@ -1039,6 +1096,26 @@ func (a *App) updateListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.input.Placeholder = "Path to WoW installation (e.g. C:\\Games\\World of Warcraft)"
 		a.input.Focus()
 		return a, textinput.Blink
+
+	case key.Matches(msg, a.keys.Profiles):
+		if a.install == nil {
+			a.pushToast("No installation selected")
+			return a, nil
+		}
+		a.loadProfiles()
+		a.profilesCursor, a.profilesOffset = 0, 0
+		a.view = viewProfiles
+		return a, nil
+
+	case key.Matches(msg, a.keys.SavedVars):
+		if a.install == nil {
+			a.pushToast("No installation selected")
+			return a, nil
+		}
+		a.loadSavedVars()
+		a.svCursor, a.svOffset = 0, 0
+		a.view = viewSavedVars
+		return a, nil
 	}
 
 	return a, nil
@@ -1331,21 +1408,36 @@ func (a *App) updateInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, a.keys.Escape):
 		a.input.Blur()
-		if a.inputMode == inputSource {
+		switch a.inputMode {
+		case inputSource:
 			a.view = viewList
-		} else {
+		case inputProfileCreate, inputProfileDuplicate, inputProfileRename:
+			a.view = viewProfiles
+		default:
 			a.view = viewPicker
 		}
 		return a, nil
 	case key.Matches(msg, a.keys.Enter):
 		val := strings.TrimSpace(a.input.Value())
 		a.input.Blur()
-		if a.inputMode == inputSource {
+		switch a.inputMode {
+		case inputSource:
 			a.view = viewList
 			if val == "" {
 				return a, nil
 			}
 			return a, a.installFromSourceCmd(val)
+		case inputProfileCreate, inputProfileDuplicate, inputProfileRename:
+			a.view = viewProfiles
+			if val == "" {
+				return a, nil
+			}
+			if err := a.applyProfileInput(val); err != nil {
+				a.pushToast("Collection: " + err.Error())
+			} else {
+				a.loadProfiles()
+			}
+			return a, nil
 		}
 		if val == "" {
 			a.view = viewPicker
@@ -1387,10 +1479,16 @@ func (a *App) View() string {
 		body = a.renderCatalog()
 	case viewCatalogAction:
 		body = a.renderCatalogAction()
+	case viewCatalogDetail:
+		body = a.renderCatalogDetail()
 	case viewUpdates:
 		body = a.renderUpdates()
 	case viewUpdatesDetail:
 		body = a.renderUpdatesDetail()
+	case viewProfiles:
+		body = a.renderProfiles()
+	case viewSavedVars:
+		body = a.renderSavedVars()
 	default:
 		body = a.renderList()
 	}
@@ -1431,6 +1529,7 @@ func (a *App) renderHints() string {
 		bindings = []key.Binding{
 			a.keys.Up, a.keys.Down, a.keys.Enter,
 			a.keys.Fix, a.keys.Filter,
+			a.keys.Profiles, a.keys.SavedVars,
 			a.keys.Catalog, a.keys.Updates, a.keys.Help, a.keys.Quit,
 		}
 	case viewInspect:
@@ -1442,13 +1541,45 @@ func (a *App) renderHints() string {
 	case viewProfile:
 		bindings = []key.Binding{a.keys.Up, a.keys.Down, a.keys.Enter, a.keys.Escape}
 	case viewCatalog:
-		bindings = []key.Binding{a.keys.Up, a.keys.Down, key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")), a.keys.Enter, a.keys.Escape}
+		bindings = []key.Binding{
+			a.keys.Up, a.keys.Down,
+			key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
+			key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "sort")),
+			key.NewBinding(key.WithKeys("W"), key.WithHelp("W", "filter")),
+			a.keys.Enter,
+			key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "details")),
+			a.keys.Escape,
+		}
 	case viewCatalogAction:
 		bindings = []key.Binding{a.keys.Up, a.keys.Down, a.keys.Enter, a.keys.Escape}
+	case viewCatalogDetail:
+		bindings = []key.Binding{
+			a.keys.Up, a.keys.Down,
+			key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "homepage")),
+			key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "releases")),
+			key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "install")),
+			a.keys.Escape,
+		}
 	case viewUpdates:
 		bindings = []key.Binding{a.keys.Up, a.keys.Down, a.keys.Updates, key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "update all")), a.keys.Enter, a.keys.Escape}
 	case viewUpdatesDetail:
 		bindings = []key.Binding{a.keys.Updates, a.keys.Escape}
+	case viewProfiles:
+		bindings = []key.Binding{
+			a.keys.Up, a.keys.Down, a.keys.Enter,
+			key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "create")),
+			key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "duplicate")),
+			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rename")),
+			key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "delete")),
+			a.keys.Escape,
+		}
+	case viewSavedVars:
+		bindings = []key.Binding{
+			a.keys.Up, a.keys.Down, a.keys.Enter,
+			a.keys.Backup,
+			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reset")),
+			a.keys.Escape,
+		}
 	default:
 		return ""
 	}
