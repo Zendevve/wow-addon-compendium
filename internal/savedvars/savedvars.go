@@ -257,22 +257,18 @@ func (m *Manager) Migrate(fromAccount, toAccount, addon string) ([]string, error
 }
 
 // savedVarsDir validates the account name and returns the account's
-// SavedVariables directory. Account names must resolve inside
-// Root/Account.
+// SavedVariables directory. Account names become a single path
+// component under Root/Account, so separators of either style and
+// dot components are rejected — the guard is identical on every
+// platform, unlike filepath.Separator-based checks.
 func (m *Manager) savedVarsDir(account string) (string, error) {
 	if account == "" {
 		return "", fmt.Errorf("no account given")
 	}
-	acct := filepath.Clean(account)
-	acctRoot := filepath.Clean(filepath.Join(m.Root, "Account"))
-	if filepath.IsAbs(acct) || acct == ".." || strings.HasPrefix(acct, ".."+string(filepath.Separator)) {
+	if strings.ContainsAny(account, `/\`) || account == "." || account == ".." {
 		return "", fmt.Errorf("invalid account name %q", account)
 	}
-	dir := filepath.Join(acctRoot, acct)
-	if !strings.HasPrefix(dir, acctRoot+string(filepath.Separator)) {
-		return "", fmt.Errorf("invalid account name %q", account)
-	}
-	return filepath.Join(dir, "SavedVariables"), nil
+	return filepath.Join(m.Root, "Account", account, "SavedVariables"), nil
 }
 
 // underRoot cleans p and refuses anything that resolves outside Root.
