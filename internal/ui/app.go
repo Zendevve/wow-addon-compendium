@@ -492,8 +492,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, tea.Batch(cmds...)
 }
 
-// updateKey dispatches keyboard input by view.
+// updateKey dispatches keyboard input by view. Quit works from every
+// view except the manual path input, where q is a normal character.
 func (a *App) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if a.view != viewInput && key.Matches(msg, a.keys.Quit) && !a.busy {
+		a.quitting = true
+		return a, tea.Quit
+	}
 	switch a.view {
 	case viewConfirm:
 		return a.updateConfirmKey(msg)
