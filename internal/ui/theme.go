@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
 	"github.com/wowfix/wowfix/internal/models"
 )
@@ -114,6 +116,10 @@ type Styles struct {
 	Option    lipgloss.Style
 	OptionSel lipgloss.Style
 
+	FilterBar     lipgloss.Style
+	ProgressFill  lipgloss.Style
+	ProgressTrack lipgloss.Style
+
 	Toast lipgloss.Style
 
 	Section lipgloss.Style
@@ -185,6 +191,16 @@ func NewStyles(t Theme) Styles {
 		Bold(true).
 		Padding(0, 1)
 
+	s.FilterBar = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder(), true).
+		BorderForeground(t.accentDim).
+		Background(t.bg).
+		Foreground(t.text).
+		Padding(0, 1)
+
+	s.ProgressFill = lipgloss.NewStyle().Foreground(t.accent)
+	s.ProgressTrack = lipgloss.NewStyle().Foreground(t.muted)
+
 	s.Toast = lipgloss.NewStyle().
 		Background(t.bgSel).
 		Foreground(t.info).
@@ -215,11 +231,11 @@ func truncate(s string, max int) string {
 	return string(runes[:max-1]) + "…"
 }
 
-// pad truncates to width and pads to width.
+// pad truncates to width and pads to width with spaces.
 func pad(s string, width int) string {
 	runes := []rune(s)
 	if len(runes) >= width {
 		return truncate(s, width)
 	}
-	return s + string(make([]rune, width-len(runes)))
+	return s + strings.Repeat(" ", width-len(runes))
 }

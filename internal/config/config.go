@@ -36,6 +36,11 @@ type Config struct {
 	LastScan time.Time `json:"last_scan,omitempty"`
 	// BackupsDir overrides the default backup location.
 	BackupsDir string `json:"backups_dir,omitempty"`
+	// CurseForgeAPIKey enables the modern CurseForge Core API
+	// (api.curseforge.com/v1). Without it the catalog falls back to
+	// the deprecated legacy endpoint. The WOWFIX_CURSEFORGE_API_KEY
+	// environment variable takes precedence over this field.
+	CurseForgeAPIKey string `json:"curseforge_api_key,omitempty"`
 }
 
 // Default returns a fresh config with sane defaults.

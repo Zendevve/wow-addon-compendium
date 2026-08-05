@@ -6,8 +6,11 @@ package ui
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -16,6 +19,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/wowfix/wowfix/internal/backup"
+	"github.com/wowfix/wowfix/internal/catalog"
 	"github.com/wowfix/wowfix/internal/config"
 	"github.com/wowfix/wowfix/internal/detector"
 	"github.com/wowfix/wowfix/internal/fixer"
@@ -44,6 +48,11 @@ type keyMap struct {
 	Install  key.Binding
 	Profile  key.Binding
 	Theme    key.Binding
+	Filter   key.Binding
+	Help     key.Binding
+	Catalog  key.Binding
+	Updates  key.Binding
+	Source   key.Binding
 	Quit     key.Binding
 	Yes      key.Binding
 	No       key.Binding
@@ -66,6 +75,11 @@ func defaultKeys() keyMap {
 		Export:   key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "export logs")),
 		Profile:  key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "profile")),
 		Theme:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
+		Filter:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+		Help:     key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
+		Catalog:  key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "catalog")),
+		Updates:  key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "updates")),
+		Source:   key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "install from source")),
 		Install:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "switch install")),
 		Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 		Yes:      key.NewBinding(key.WithKeys("y", "enter")),
@@ -86,6 +100,19 @@ const (
 	viewProfile
 	viewConfirm
 	viewInput
+	viewHelp
+	viewCatalog
+	viewCatalogAction
+	viewUpdates
+	viewUpdatesDetail
+)
+
+// inputKind selects what the shared manual input prompt is asking for.
+type inputKind int
+
+const (
+	inputPath inputKind = iota
+	inputSource
 )
 
 // --- messages ---------------------------------------------------------
@@ -119,6 +146,17 @@ type toastMsg struct {
 	text string
 }
 
+// toastItem is one timestamped notification in the toast stack.
+type toastItem struct {
+	text string
+	at   time.Time
+}
+
+const (
+	toastLifetime = 6 * time.Second
+	maxToasts     = 4
+)
+
 type busyDoneMsg struct{}
 
 // App is the root model.
@@ -149,9 +187,64 @@ type App struct {
 	height   int
 	busy     bool
 	busyText string
-	toast    string
-	toastAt  time.Time
+	toasts   []toastItem
 	quitting bool
+
+	// help overlay
+	helpPrev view
+
+	// filter state (main addon list)
+	filtering bool
+	filter    textinput.Model
+	filterIdx []int // scan.Addons indices matching the filter, ranked
+
+	// catalog services
+	catalog  *catalog.Catalog
+	registry *catalog.Registry
+	catErr   error
+
+	// registry badges: folder (lowercased) -> tracked entry, built per scan
+	registryByFolder map[string]catalog.Entry
+
+	// catalog browser
+	search    textinput.Model
+	results   []*catalog.Addon
+	resultCur int
+
+	// catalog search debounce/rate limiting. searchCancel aborts the
+	// pending debounce timer; searchPending/searching drive the
+	// "searching…" hint; lastSearchAt enforces the per-session minimum
+	// interval between provider calls.
+	searchCancel  func()
+	searchPending bool
+	searching     bool
+	lastSearchAt  time.Time
+
+	// catalog action dialog (install / open homepage)
+	actionAddon    *catalog.Addon
+	actionChoices  []string
+	actionCursor   int
+	actionCallback func(choice string)
+
+	// updates view
+	updates    []catalog.Update
+	updatesCur int
+	updatesOff int
+	upToDate   int
+
+	// install/update progress; the counters are written by the download
+	// callback on the command goroutine and read on spinner ticks.
+	installRunning  bool
+	installProgress *Progress
+	progressDone    atomic.Int64
+	progressTotal   atomic.Int64
+
+	// recheckAfterScan re-runs the update check once the next scan lands
+	// (used after installs/updates that change the registry).
+	recheckAfterScan bool
+
+	// shared manual input mode (path vs install source)
+	inputMode inputKind
 
 	// inspect state
 	inspectAddon  *models.Addon
@@ -193,18 +286,51 @@ func NewApp(cfg *config.Config, store *config.Store, log *logger.Logger) *App {
 	input.Placeholder = "C:\\Games\\World of Warcraft or /opt/wow"
 	input.CharLimit = 500
 
+	filter := textinput.New()
+	filter.Placeholder = "filter addons…"
+	filter.Prompt = "/"
+	filter.CharLimit = 200
+
+	search := textinput.New()
+	search.Placeholder = "search addons across providers…"
+	search.CharLimit = 200
+
+	// Catalog services: all providers enabled, default HTTP client. The
+	// registry lives under the config dir and tracks catalog installs so
+	// the main list can show provider badges and the updater can run.
+	cat, catErr := catalog.New(nil, http.DefaultClient)
+	reg, regErr := catalog.NewRegistry(filepath.Join(store.Dir(), "registry.json"))
+	if catErr == nil && regErr == nil {
+		cat.Reg = reg
+		cat.Log = log
+		cat.Profile = models.ProfileByID(cfg.Profile)
+	} else {
+		cat = nil
+		if catErr == nil {
+			catErr = regErr
+		}
+	}
+	if catErr != nil {
+		log.Errorf("catalog unavailable: %v", catErr)
+	}
+
 	return &App{
-		ctx:     ctx,
-		cancel:  cancel,
-		cfg:     cfg,
-		store:   store,
-		log:     log,
-		keys:    defaultKeys(),
-		theme:   theme,
-		styles:  NewStyles(theme),
-		spinner: sp,
-		input:   input,
-		profile: models.ProfileByID(cfg.Profile),
+		ctx:      ctx,
+		cancel:   cancel,
+		cfg:      cfg,
+		store:    store,
+		log:      log,
+		keys:     defaultKeys(),
+		theme:    theme,
+		styles:   NewStyles(theme),
+		spinner:  sp,
+		input:    input,
+		filter:   filter,
+		search:   search,
+		catalog:  cat,
+		registry: reg,
+		catErr:   catErr,
+		profile:  models.ProfileByID(cfg.Profile),
 	}
 }
 
@@ -330,19 +456,104 @@ func (a *App) toastMsg(text string) tea.Cmd {
 }
 
 func (a *App) pushToast(text string) {
-	a.toast = text
-	a.toastAt = time.Now()
+	a.toasts = append(a.toasts, toastItem{text: text, at: time.Now()})
+	if len(a.toasts) > maxToasts {
+		a.toasts = a.toasts[len(a.toasts)-maxToasts:]
+	}
+}
+
+// listLen returns the number of visible rows in the main list, honoring
+// the active filter.
+func (a *App) listLen() int {
+	if a.scan == nil {
+		return 0
+	}
+	if a.filtering {
+		return len(a.filterIdx)
+	}
+	return len(a.scan.Addons)
+}
+
+// rowToIndex maps a visible list row to an index into scan.Addons, or -1
+// when the row is out of range.
+func (a *App) rowToIndex(row int) int {
+	if a.filtering {
+		if row < 0 || row >= len(a.filterIdx) {
+			return -1
+		}
+		return a.filterIdx[row]
+	}
+	if row < 0 || row >= len(a.scan.Addons) {
+		return -1
+	}
+	return row
+}
+
+// applyFilter recomputes filterIdx from the filter input, ranking matches
+// by fuzzy score (stable: ties keep scan order).
+func (a *App) applyFilter() {
+	a.filterIdx = a.filterIdx[:0]
+	if a.scan == nil {
+		a.clampCursor()
+		return
+	}
+	q := a.filter.Value()
+	if q == "" {
+		for i := range a.scan.Addons {
+			a.filterIdx = append(a.filterIdx, i)
+		}
+	} else {
+		type scored struct {
+			idx, score int
+		}
+		ranked := make([]scored, 0, len(a.scan.Addons))
+		for i, ad := range a.scan.Addons {
+			if s := FuzzyScore(q, ad.FolderName); s > 0 {
+				ranked = append(ranked, scored{i, s})
+			}
+		}
+		sort.SliceStable(ranked, func(x, y int) bool {
+			return ranked[x].score > ranked[y].score
+		})
+		for _, r := range ranked {
+			a.filterIdx = append(a.filterIdx, r.idx)
+		}
+	}
+	a.clampCursor()
+}
+
+// reloadRegistryBadges rebuilds the folder -> registry entry map used
+// for the SOURCE column of the main list.
+func (a *App) reloadRegistryBadges() {
+	a.registryByFolder = nil
+	if a.registry == nil {
+		return
+	}
+	a.registryByFolder = make(map[string]catalog.Entry)
+	for _, e := range a.registry.Entries() {
+		a.registryByFolder[strings.ToLower(e.Folder)] = e
+	}
+}
+
+// closeFilter exits filter mode and restores the unfiltered list.
+func (a *App) closeFilter() {
+	a.filtering = false
+	a.filter.Blur()
+	a.filter.SetValue("")
+	a.filterIdx = a.filterIdx[:0]
+	a.clampCursor()
 }
 
 // addonAt returns the addon under the cursor, or nil.
 func (a *App) addonAt() *models.Addon {
-	if a.scan == nil || len(a.scan.Addons) == 0 {
+	if a.scan == nil {
 		return nil
 	}
-	if a.cursor < 0 || a.cursor >= len(a.scan.Addons) {
+	idx := a.rowToIndex(a.cursor)
+	if idx < 0 {
 		return nil
 	}
-	return a.scan.Addons[a.cursor]
+	return a.scan.Addons[idx]
 }
 
 func (a *App) fixableAddons() []*models.Addon {
@@ -359,21 +570,29 @@ func (a *App) fixableAddons() []*models.Addon {
 }
 
 // visibleRows computes how many list rows fit in the current height.
+// The filter bar takes a row while it is open.
 func (a *App) visibleRows() int {
 	rows := a.height - 12
 	if rows < 3 {
 		rows = 3
 	}
+	if a.filtering {
+		rows--
+		if rows < 2 {
+			rows = 2
+		}
+	}
 	return rows
 }
 
-// clampCursor keeps the cursor inside the list and scrolls the offset.
+// clampCursor keeps the cursor inside the (possibly filtered) list and
+// scrolls the offset.
 func (a *App) clampCursor() {
 	if a.scan == nil {
 		a.cursor, a.offset = 0, 0
 		return
 	}
-	n := len(a.scan.Addons)
+	n := a.listLen()
 	if n == 0 {
 		a.cursor, a.offset = 0, 0
 		return
@@ -408,9 +627,23 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return a.updateKey(m)
 
+	case tea.MouseMsg:
+		return a.updateMouse(m)
+
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		a.spinner, cmd = a.spinner.Update(msg)
+		if a.installRunning && a.installProgress != nil {
+			done := a.progressDone.Load()
+			total := a.progressTotal.Load()
+			if total > 0 {
+				a.installProgress.Indeterminate = false
+				a.installProgress.Percent = float64(done) / float64(total)
+			} else {
+				a.installProgress.Indeterminate = true
+			}
+			a.installProgress.Frame++
+		}
 		return a, cmd
 
 	case scanResultMsg:
@@ -428,11 +661,22 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.cfg.Flavor = m.install.Flavor
 		a.cfg.LastScan = m.result.ScannedAt
 		a.save()
+		a.reloadRegistryBadges()
+		if a.catalog != nil {
+			a.catalog.Profile = a.profile
+		}
 		total, problems, errors := m.result.Stats()
 		a.pushToast(fmt.Sprintf("Scanned %d addon(s) — %d with issues, %d errors", total, problems, errors))
 		a.log.Infof("Scan complete: %d addons, %d problems, %d errors", total, problems, errors)
 		a.view = viewList
+		a.closeFilter()
 		a.clampCursor()
+		if a.recheckAfterScan {
+			a.recheckAfterScan = false
+			a.busy = true
+			a.busyText = "Checking for updates…"
+			return a, a.checkUpdatesCmd()
+		}
 		return a, nil
 
 	case detectMsg:
@@ -484,6 +728,77 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.pushToast(m.text)
 		return a, nil
 
+	case catalogSearchMsg:
+		// Drop stale replies: the query has moved on.
+		if m.query != a.search.Value() {
+			return a, nil
+		}
+		a.results = m.results
+		a.resultCur = 0
+		a.searching = false
+		a.searchPending = false
+		if m.err != nil && len(m.results) == 0 {
+			a.pushToast("Search failed: " + m.err.Error())
+		}
+		return a, nil
+
+	case searchDebounceMsg:
+		// The quiet period elapsed: run the search (rate limit applied).
+		return a, a.fireSearch()
+
+	case installDoneMsg:
+		a.busy = false
+		a.installRunning = false
+		a.installProgress = nil
+		if m.err != nil {
+			a.pushToast("Install failed: " + m.err.Error())
+			a.log.Errorf("Install failed: %v", m.err)
+			return a, nil
+		}
+		a.pushToast("Installed " + strings.Join(m.names, ", "))
+		a.log.Infof("Installed %s", strings.Join(m.names, ", "))
+		if a.install != nil {
+			return a, a.scanCmd(a.install.Root, a.install.Flavor)
+		}
+		return a, nil
+
+	case updatesMsg:
+		a.busy = false
+		if m.updates == nil {
+			m.updates = []catalog.Update{}
+		}
+		a.updates = m.updates
+		a.upToDate = maxInt(0, m.checked-len(m.updates))
+		a.view = viewUpdates
+		a.updatesCur, a.updatesOff = 0, 0
+		if m.err != nil {
+			a.pushToast("Update check: " + m.err.Error())
+			a.log.Warn("Update check: " + m.err.Error())
+		}
+		return a, nil
+
+	case updateDoneMsg:
+		a.busy = false
+		if m.err != nil {
+			a.pushToast("Update failed: " + m.err.Error())
+			a.log.Errorf("Update failed: %v", m.err)
+			return a, nil
+		}
+		a.pushToast("Updated " + m.folder)
+		a.log.Infof("Updated %s", m.folder)
+		return a, a.refreshAfterUpdate()
+
+	case updateAllDoneMsg:
+		a.busy = false
+		if m.err != nil {
+			a.pushToast(fmt.Sprintf("Update all: %d applied, %d failed (%v)", m.applied, m.failed, m.err))
+			a.log.Errorf("Update all: %d applied, %d failed: %v", m.applied, m.failed, m.err)
+		} else {
+			a.pushToast(fmt.Sprintf("Update all: %d applied, %d failed", m.applied, m.failed))
+			a.log.Infof("Update all: %d applied, %d failed", m.applied, m.failed)
+		}
+		return a, a.refreshAfterUpdate()
+
 	case busyDoneMsg:
 		a.busy = false
 		return a, nil
@@ -492,12 +807,29 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, tea.Batch(cmds...)
 }
 
+// inputFocused reports whether a text input is currently consuming typed
+// keys: the manual path/source prompt, the list filter, or a focused
+// catalog search box.
+func (a *App) inputFocused() bool {
+	return a.view == viewInput || a.filtering ||
+		(a.view == viewCatalog && a.search.Focused())
+}
+
 // updateKey dispatches keyboard input by view. Quit works from every
-// view except the manual path input, where q is a normal character.
+// view except the manual path input and the open filter (where q is a
+// normal character) and the help overlay (where q closes it).
 func (a *App) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if a.view != viewInput && key.Matches(msg, a.keys.Quit) && !a.busy {
+	if a.view == viewHelp {
+		return a.updateHelpKey(msg)
+	}
+	if !a.inputFocused() && key.Matches(msg, a.keys.Quit) && !a.busy {
 		a.quitting = true
 		return a, tea.Quit
+	}
+	if a.view != viewConfirm && !a.inputFocused() && key.Matches(msg, a.keys.Help) {
+		a.helpPrev = a.view
+		a.view = viewHelp
+		return a, nil
 	}
 	switch a.view {
 	case viewConfirm:
@@ -512,6 +844,14 @@ func (a *App) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.updateProfileKey(msg)
 	case viewInspect:
 		return a.updateInspectKey(msg)
+	case viewCatalog:
+		return a.updateCatalogKey(msg)
+	case viewCatalogAction:
+		return a.updateCatalogActionKey(msg)
+	case viewUpdates:
+		return a.updateUpdatesKey(msg)
+	case viewUpdatesDetail:
+		return a.updateUpdatesDetailKey(msg)
 	default:
 		return a.updateListKey(msg)
 	}
@@ -520,6 +860,9 @@ func (a *App) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // --- list view keys ---------------------------------------------------
 
 func (a *App) updateListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if a.filtering {
+		return a.updateFilterKey(msg)
+	}
 	switch {
 	case key.Matches(msg, a.keys.Quit):
 		if a.busy {
@@ -529,19 +872,19 @@ func (a *App) updateListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, tea.Quit
 
 	case key.Matches(msg, a.keys.Up):
-		if a.scan != nil && len(a.scan.Addons) > 0 {
+		if a.scan != nil && a.listLen() > 0 {
 			a.cursor--
 			a.clampCursor()
 		}
 
 	case key.Matches(msg, a.keys.Down):
-		if a.scan != nil && len(a.scan.Addons) > 0 {
+		if a.scan != nil && a.listLen() > 0 {
 			a.cursor++
 			a.clampCursor()
 		}
 
 	case key.Matches(msg, a.keys.Enter):
-		if a.scan == nil || len(a.scan.Addons) == 0 {
+		if a.scan == nil || a.listLen() == 0 {
 			return a, nil
 		}
 		a.view = viewInspect
@@ -551,6 +894,16 @@ func (a *App) updateListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.inspectSize = size
 		}
 		return a, nil
+
+	case key.Matches(msg, a.keys.Filter):
+		if a.busy {
+			return a, nil
+		}
+		a.filtering = true
+		a.filter.SetValue("")
+		a.filter.Focus()
+		a.applyFilter()
+		return a, textinput.Blink
 
 	case key.Matches(msg, a.keys.Fix):
 		addon := a.addonAt()
@@ -645,14 +998,143 @@ func (a *App) updateListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.save()
 		return a, nil
 
+	case key.Matches(msg, a.keys.Catalog):
+		if a.catalog == nil {
+			a.pushToast("Catalog unavailable: " + a.catErr.Error())
+			return a, nil
+		}
+		a.cancelSearchDebounce()
+		a.view = viewCatalog
+		a.search.Blur()
+		a.search.SetValue("")
+		a.results = nil
+		a.resultCur = 0
+		return a, nil
+
+	case key.Matches(msg, a.keys.Updates):
+		if a.catalog == nil || a.registry == nil {
+			a.pushToast("Catalog unavailable: " + a.catErr.Error())
+			return a, nil
+		}
+		if a.install == nil {
+			a.pushToast("No installation selected")
+			return a, nil
+		}
+		a.busy = true
+		a.busyText = "Checking for updates…"
+		return a, a.checkUpdatesCmd()
+
+	case key.Matches(msg, a.keys.Source):
+		a.view = viewInput
+		a.inputMode = inputSource
+		a.input.Reset()
+		a.input.Placeholder = "owner/repo or addon URL (github, curseforge, wowinterface, tukui)"
+		a.input.Focus()
+		return a, textinput.Blink
+
 	case key.Matches(msg, a.keys.Install):
 		a.view = viewInput
+		a.inputMode = inputPath
 		a.input.Reset()
 		a.input.Placeholder = "Path to WoW installation (e.g. C:\\Games\\World of Warcraft)"
 		a.input.Focus()
 		return a, textinput.Blink
 	}
 
+	return a, nil
+}
+
+// --- filter bar -------------------------------------------------------
+
+// updateFilterKey handles input while the list filter is open. Every key
+// types into the filter except esc/enter (close) and ctrl+c (quit).
+func (a *App) updateFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+c"))):
+		a.quitting = true
+		return a, tea.Quit
+
+	case key.Matches(msg, a.keys.Escape):
+		a.closeFilter()
+		return a, nil
+
+	case key.Matches(msg, a.keys.Enter):
+		addon := a.addonAt()
+		a.closeFilter()
+		if addon == nil {
+			return a, nil
+		}
+		a.view = viewInspect
+		a.inspectAddon = addon
+		a.inspectSize = 0
+		if size, err := utils.DirSize(addon.Path); err == nil {
+			a.inspectSize = size
+		}
+		return a, nil
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("backspace"))) && a.filter.Value() == "":
+		a.closeFilter()
+		return a, nil
+
+	default:
+		var cmd tea.Cmd
+		a.filter, cmd = a.filter.Update(msg)
+		a.applyFilter()
+		return a, cmd
+	}
+}
+
+// --- help overlay -----------------------------------------------------
+
+func (a *App) updateHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, a.keys.Escape),
+		key.Matches(msg, key.NewBinding(key.WithKeys("q"))),
+		key.Matches(msg, a.keys.Help):
+		a.view = a.helpPrev
+		if a.view == viewHelp {
+			a.view = viewList
+		}
+	case key.Matches(msg, a.keys.Quit): // ctrl+c
+		a.quitting = true
+		return a, tea.Quit
+	}
+	return a, nil
+}
+
+// --- mouse ------------------------------------------------------------
+
+// updateMouse advances the list cursor or scrolls the current view on
+// wheel events. Keyboard paths are unchanged.
+func (a *App) updateMouse(m tea.MouseMsg) (tea.Model, tea.Cmd) {
+	switch m.Button {
+	case tea.MouseButtonWheelUp:
+		switch a.view {
+		case viewList:
+			if a.scan != nil && a.listLen() > 0 {
+				a.cursor--
+				a.clampCursor()
+			}
+		case viewInspect:
+			a.inspectOffset = maxInt(0, a.inspectOffset-3)
+		case viewLogs:
+			a.logsOffset = maxInt(0, a.logsOffset-1)
+		}
+	case tea.MouseButtonWheelDown:
+		switch a.view {
+		case viewList:
+			if a.scan != nil && a.listLen() > 0 {
+				a.cursor++
+				a.clampCursor()
+			}
+		case viewInspect:
+			a.inspectOffset += 3
+		case viewLogs:
+			entries := a.log.Entries()
+			rows := a.visibleRows()
+			a.logsOffset = minInt(maxInt(0, len(entries)-rows), a.logsOffset+1)
+		}
+	}
 	return a, nil
 }
 
@@ -801,6 +1283,7 @@ func (a *App) updatePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case key.Matches(msg, a.keys.Install):
 		a.view = viewInput
+		a.inputMode = inputPath
 		a.input.Reset()
 		a.input.Placeholder = "Path to WoW installation (e.g. C:\\Games\\World of Warcraft)"
 		a.input.Focus()
@@ -826,6 +1309,9 @@ func (a *App) updateProfileKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.profile = &p
 		a.cfg.Profile = p.ID
 		a.save()
+		if a.catalog != nil {
+			a.catalog.Profile = a.profile
+		}
 		a.view = viewList
 		a.pushToast(fmt.Sprintf("Profile set to %s (interface %d)", p.Name, p.Interface))
 		if a.install != nil {
@@ -845,22 +1331,33 @@ func (a *App) updateInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, a.keys.Escape):
 		a.input.Blur()
-		a.view = viewPicker
+		if a.inputMode == inputSource {
+			a.view = viewList
+		} else {
+			a.view = viewPicker
+		}
 		return a, nil
 	case key.Matches(msg, a.keys.Enter):
-		path := strings.TrimSpace(a.input.Value())
+		val := strings.TrimSpace(a.input.Value())
 		a.input.Blur()
-		if path == "" {
+		if a.inputMode == inputSource {
+			a.view = viewList
+			if val == "" {
+				return a, nil
+			}
+			return a, a.installFromSourceCmd(val)
+		}
+		if val == "" {
 			a.view = viewPicker
 			return a, nil
 		}
-		a.cfg.WoWPath = path
+		a.cfg.WoWPath = val
 		a.cfg.Flavor = ""
 		a.save()
 		a.view = viewList
 		a.busy = true
 		a.busyText = "Scanning…"
-		return a, a.scanCmd(path, "")
+		return a, a.scanCmd(val, "")
 	default:
 		var cmd tea.Cmd
 		a.input, cmd = a.input.Update(msg)
@@ -884,22 +1381,87 @@ func (a *App) View() string {
 		body = a.renderConfirm()
 	case viewInput:
 		body = a.renderInput()
+	case viewHelp:
+		body = a.renderHelp()
+	case viewCatalog:
+		body = a.renderCatalog()
+	case viewCatalogAction:
+		body = a.renderCatalogAction()
+	case viewUpdates:
+		body = a.renderUpdates()
+	case viewUpdatesDetail:
+		body = a.renderUpdatesDetail()
 	default:
 		body = a.renderList()
 	}
 	return a.renderFrame(body)
 }
 
-// renderFrame wraps body in header/footer chrome.
+// renderFrame wraps body in header/footer chrome and the toast stack.
 func (a *App) renderFrame(body string) string {
 	var b strings.Builder
 	b.WriteString(a.renderHeader())
 	b.WriteString("\n")
 	b.WriteString(body)
-	if a.toast != "" && time.Since(a.toastAt) < 6*time.Second {
-		b.WriteString("\n" + a.styles.Toast.Render(a.toast))
+	b.WriteString(a.renderHints())
+
+	if a.installRunning && a.installProgress != nil {
+		b.WriteString("\n" + a.installProgress.View())
+	}
+
+	now := time.Now()
+	live := a.toasts[:0]
+	for _, t := range a.toasts {
+		if now.Sub(t.at) < toastLifetime {
+			live = append(live, t)
+		}
+	}
+	a.toasts = live
+	for _, t := range live {
+		b.WriteString("\n" + a.styles.Toast.Render(t.at.Format("15:04:05")+"  "+t.text))
 	}
 	return a.styles.App.Render(b.String())
+}
+
+// renderHints shows a per-view key hint bar at the bottom of the frame.
+func (a *App) renderHints() string {
+	var bindings []key.Binding
+	switch a.view {
+	case viewList:
+		bindings = []key.Binding{
+			a.keys.Up, a.keys.Down, a.keys.Enter,
+			a.keys.Fix, a.keys.Filter,
+			a.keys.Catalog, a.keys.Updates, a.keys.Help, a.keys.Quit,
+		}
+	case viewInspect:
+		bindings = []key.Binding{a.keys.Up, a.keys.Down, a.keys.Fix, a.keys.Delete, a.keys.Escape}
+	case viewLogs:
+		bindings = []key.Binding{a.keys.ScrollUp, a.keys.ScrollDn, a.keys.Export, a.keys.Escape}
+	case viewPicker:
+		bindings = []key.Binding{a.keys.Up, a.keys.Down, a.keys.Enter, a.keys.Install, a.keys.Escape}
+	case viewProfile:
+		bindings = []key.Binding{a.keys.Up, a.keys.Down, a.keys.Enter, a.keys.Escape}
+	case viewCatalog:
+		bindings = []key.Binding{a.keys.Up, a.keys.Down, key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")), a.keys.Enter, a.keys.Escape}
+	case viewCatalogAction:
+		bindings = []key.Binding{a.keys.Up, a.keys.Down, a.keys.Enter, a.keys.Escape}
+	case viewUpdates:
+		bindings = []key.Binding{a.keys.Up, a.keys.Down, a.keys.Updates, key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "update all")), a.keys.Enter, a.keys.Escape}
+	case viewUpdatesDetail:
+		bindings = []key.Binding{a.keys.Updates, a.keys.Escape}
+	default:
+		return ""
+	}
+	var parts []string
+	for _, b := range bindings {
+		h := b.Help()
+		parts = append(parts, a.styles.KeyKey.Render(h.Key)+" "+a.styles.KeyHint.Render(h.Desc))
+	}
+	line := strings.Join(parts, "  ·  ")
+	if w := lipgloss.Width(line); w < a.width {
+		line += strings.Repeat(" ", a.width-w)
+	}
+	return "\n" + a.styles.Footer.Render(line)
 }
 
 // renderHeader shows the installation and detected version.

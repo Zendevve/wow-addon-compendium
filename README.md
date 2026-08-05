@@ -45,6 +45,15 @@ confirmation screens.
   Cataclysm, Classic Era, Hardcore, Season of Discovery, Retail. TOCs are never edited.
 - **ZIP installer** — `wowfix install addon.zip` extracts, flattens, renames and
   validates before installing. Drag-and-drop works (drop a zip onto the executable).
+- **Catalog & providers** — `wowfix search <query>` queries GitHub,
+  CurseForge, WowInterface and Tukui in parallel and merges the results;
+  `wowfix install <url|owner/repo>` installs straight from any provider.
+- **Update manager** — catalog installs are tracked in a registry;
+  `wowfix update` (or `u`/`U` in the TUI) checks every tracked addon
+  against its provider and applies newer releases.
+- **TUI v2** — fuzzy addon filter (`/`), a help overlay (`?`), a catalog
+  browser (`c`), an updates panel (`u`/`U`), install-from-source (`i`)
+  and mouse-wheel scrolling throughout.
 - **Backups** — every mutation is preceded by a `Backups/<timestamp>/` snapshot;
   `wowfix restore` brings folders back (the current state is snapshotted first).
 - **Trash, never delete** — removals go to the OS trash (Recycle Bin on Windows,
@@ -91,6 +100,9 @@ wowfix
 | Key             | Action                            |
 |-----------------|-----------------------------------|
 | `↑`/`↓` `k`/`j` | Navigate the addon list           |
+| mouse wheel     | Scroll the list / inspect / logs  |
+| `/`             | Fuzzy-filter the addon list       |
+| `?`             | Help overlay (all keybindings)    |
 | `Enter`         | Inspect the selected addon        |
 | `f`             | Fix the selected addon            |
 | `a`             | Fix all detected problems         |
@@ -98,6 +110,9 @@ wowfix
 | `r`             | Rescan                            |
 | `b`             | Backup all addons                 |
 | `l` / `e`       | Logs / export logs to a file      |
+| `c`             | Open the addon catalog browser    |
+| `i`             | Install an addon from a source (URL or `owner/repo`) |
+| `u` / `U`       | Check updates / update all (updates view) |
 | `p`             | Choose game profile               |
 | `s`             | Switch WoW installation           |
 | `t`             | Toggle dark/light theme           |
@@ -114,8 +129,12 @@ wowfix                        launch the terminal UI
 wowfix scan                   scan and report problems
 wowfix fix [--yes]            fix everything (backups first)
 wowfix install addon.zip      install an addon archive
+wowfix install <url|owner/repo>  install from a provider source
 wowfix validate               TOC compatibility table
 wowfix list                   list addons with status
+wowfix search <query>         search GitHub/CurseForge/WowInterface/Tukui
+wowfix update [--yes]         check and apply addon updates
+wowfix sources                list catalog providers and their caveats
 wowfix backup                 snapshot all addons
 wowfix restore [id]           list backups, or restore one
 wowfix doctor                 environment & permission checks
@@ -125,7 +144,14 @@ wowfix preview                render a text preview of the TUI
 ```
 
 Common flags: `--path <dir>` (WoW root, overrides config), `--yes` (skip
-prompts), `--json` (machine-readable output for `scan`/`list`/`validate`).
+prompts), `--json` (machine-readable output for `scan`/`list`/`validate`/
+`search`).
+
+`install` accepts a local `.zip`, a provider URL (CurseForge, WowInterface,
+Tukui, GitHub) or a GitHub `owner/repo` pair. `search` degrades gracefully
+when a provider is unreachable: the working results are printed and the
+provider errors go to stderr. GitHub's unauthenticated API is rate-limited
+to ~60 requests/hour per IP.
 
 ### Configuration
 
@@ -138,11 +164,16 @@ Stored at `os.UserConfigDir()/wowfix/config.json`:
 - `auto_backup` — snapshot before every mutation (default `true`)
 - `confirmations` — confirm destructive actions (default `true`)
 - `backups_dir` — override the `Backups/` location (default: next to the game)
+- `curseforge_api_key` — enables the modern CurseForge Core API
+  (without it the catalog falls back to the deprecated legacy endpoint);
+  the `WOWFIX_CURSEFORGE_API_KEY` environment variable takes precedence
 
 ```sh
 wowfix config set wow_path "D:\Games\World of Warcraft"
 wowfix config set profile wrath
 wowfix config set theme light
+wowfix config set curseforge_api_key "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+WOWFIX_CURSEFORGE_API_KEY=... wowfix search weakauras
 ```
 
 ## Safety model
@@ -163,6 +194,7 @@ wowfix config set theme light
 cmd/wowfix/          CLI entry point (command dispatch, JSON output)
 internal/
   models/            shared data types: Addon, TOC, Issue, Profile
+  catalog/           providers (GitHub/CurseForge/WowInterface/Tukui), registry, updater
   scanner/           detection only — never touches the filesystem
   validator/         TOC parser + compatibility classification
   fixer/             repairs: rename, flatten, merge, delete (with backups)
@@ -171,14 +203,14 @@ internal/
   detector/          WoW install discovery + PE version parsing
   config/            persisted user configuration
   logger/            ring-buffer logger with file sink + export
-  ui/                Bubble Tea TUI (list, inspect, logs, pickers, dialogs)
+  ui/                Bubble Tea TUI (list, inspect, logs, catalog, updates, dialogs)
   utils/             filesystem helpers, cross-platform trash, PE parser
 ```
 
-The core packages (scanner, validator, fixer, installer, backup, config) are
-pure business logic with no UI dependency — the CLI and the TUI are two thin
-front-ends over the same engine, so the whole feature set is available from
-both.
+The core packages (scanner, validator, fixer, installer, backup, catalog,
+config) are pure business logic with no UI dependency — the CLI and the TUI
+are two thin front-ends over the same engine, so the whole feature set is
+available from both.
 
 ## Testing
 
@@ -202,9 +234,10 @@ wowfix restore  --path testdata/wow
 The architecture is designed so the tool can grow into a full addon manager
 without refactoring:
 
-- **GitHub integration / Update manager** — a new provider package can sit
-  beside `installer` and reuse `scanner` + `fixer` for the drop-in step;
-  `TOC.Version` is already parsed for version comparison.
+- **Providers** — a provider is one `catalog.Provider` implementation
+  (`Search`, `Resolve`, `Latest`, `Download`); the merged search, the
+  registry and the updater all treat providers uniformly, so adding
+  Wago, GitLab or a private source is a new file, not a rewrite.
 - **Profiles** — the profile table in `models` is the single source of truth;
   enable/disable state per profile slots in naturally alongside `config`.
 - **Import/export** — `scan`/`list` already emit JSON; YAML/manifest exports are
@@ -217,11 +250,10 @@ without refactoring:
 
 ## Roadmap
 
-- Install from GitHub releases / default-branch zips, with update checks
 - Addon profiles (enable/disable sets, PvE/PvP/Raiding/Leveling presets)
 - Export/import collections (zip, manifest, JSON, YAML)
-- Addon catalog browser (search, filter, compatibility info)
 - SavedVariables backup/reset/migration
+- Wago/other provider plugins, update filters (ignore major versions)
 
 ## License
 

@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/wowfix/wowfix/internal/catalog"
 	"github.com/wowfix/wowfix/internal/models"
 	"github.com/wowfix/wowfix/internal/validator"
 )
@@ -23,41 +25,60 @@ func (a *App) renderList() string {
 	if width < 40 {
 		width = 40
 	}
-	statusW, nameW, problemW, fixW := 9, 26, width-9-26-18, 18
+	// Column widths sum to the box inner width (outer a.width-2 minus
+	// borders and padding) so rows never wrap.
+	statusW, nameW, verW, srcW, problemW, fixW := 8, 20, 8, 5, width-62, 14
 	if problemW < 12 {
 		problemW = 12
 	}
 
 	var b strings.Builder
-	header := fmt.Sprintf("%s %s %s %s",
+	header := fmt.Sprintf("%s %s %s %s %s %s",
 		pad("STATUS", statusW),
 		pad("ADDON", nameW),
+		pad("VERSION", verW),
+		pad("SRC", srcW),
 		pad("PROBLEM", problemW),
 		pad("FIX", fixW))
 	b.WriteString(a.styles.ColumnHeader.Render(header))
 	b.WriteString("\n")
 
+	n := a.listLen()
 	end := a.offset + rows
-	if end > len(a.scan.Addons) {
-		end = len(a.scan.Addons)
+	if end > n {
+		end = n
 	}
-	for i := a.offset; i < end; i++ {
-		addon := a.scan.Addons[i]
-		b.WriteString(a.renderRow(addon, i, statusW, nameW, problemW, fixW))
-		if i < end-1 {
-			b.WriteString("\n")
+	if n == 0 {
+		b.WriteString(a.styles.Hint.Render(fmt.Sprintf("No addons match %q", a.filter.Value())))
+		b.WriteString("\n")
+	} else {
+		for row := a.offset; row < end; row++ {
+			idx := a.rowToIndex(row)
+			if idx < 0 {
+				continue
+			}
+			addon := a.scan.Addons[idx]
+			b.WriteString(a.renderRow(addon, row, statusW, nameW, verW, srcW, problemW, fixW))
+			if row < end-1 {
+				b.WriteString("\n")
+			}
 		}
 	}
 
 	// Footer note for any unlisted rows.
-	if len(a.scan.Addons) > end {
-		b.WriteString("\n" + a.styles.RowMuted.Render(fmt.Sprintf("… %d more", len(a.scan.Addons)-end)))
+	if n > end {
+		b.WriteString("\n" + a.styles.RowMuted.Render(fmt.Sprintf("… %d more", n-end)))
+	}
+
+	// Filter bar sits at the bottom of the list, not in a dialog.
+	if a.filtering {
+		b.WriteString("\n" + a.styles.FilterBar.Render(a.filter.View()))
 	}
 
 	return a.styles.ListBox.Width(width + 2).Render(b.String())
 }
 
-func (a *App) renderRow(addon *models.Addon, idx, statusW, nameW, problemW, fixW int) string {
+func (a *App) renderRow(addon *models.Addon, idx, statusW, nameW, verW, srcW, problemW, fixW int) string {
 	icon, iconStyle := a.theme.IconForStatus(addon.Status)
 	selected := idx == a.cursor
 
@@ -75,13 +96,24 @@ func (a *App) renderRow(addon *models.Addon, idx, statusW, nameW, problemW, fixW
 		problem = "Nested folder"
 	}
 
+	// Installed version from the primary TOC (## Version), when present.
+	version := "—"
+	if toc := addon.PrimaryTOC(); toc != nil && toc.Version != "" {
+		version = toc.Version
+	}
+	source := a.providerBadge(addon.FolderName)
+
 	status := iconStyle.Render(pad("  "+icon, statusW))
+	verCell := a.styles.RowMuted.Render(pad(version, verW))
+	srcCell := a.styles.RowMuted.Render(pad(source, srcW))
 	problemCell := a.styles.RowMuted.Render(pad(problem, problemW))
 	fixCell := a.styles.RowMuted.Render(pad(fix, fixW))
 
-	row := fmt.Sprintf("%s %s %s %s",
+	row := fmt.Sprintf("%s %s %s %s %s %s",
 		status,
 		a.styles.RowName.Render(pad(name, nameW)),
+		verCell,
+		srcCell,
 		problemCell,
 		fixCell)
 
@@ -89,6 +121,29 @@ func (a *App) renderRow(addon *models.Addon, idx, statusW, nameW, problemW, fixW
 		return a.styles.RowSelected.Render(row)
 	}
 	return a.styles.Row.Render(row)
+}
+
+// providerBadge maps a folder to its registry source badge: a short
+// provider tag when the addon is tracked, "local" otherwise.
+func (a *App) providerBadge(folder string) string {
+	if a.registryByFolder == nil {
+		return "local"
+	}
+	e, ok := a.registryByFolder[strings.ToLower(folder)]
+	if !ok || e.Provider == "" {
+		return "local"
+	}
+	switch e.Provider {
+	case catalog.ProviderGitHub:
+		return "GH"
+	case catalog.ProviderCurseForge:
+		return "CF"
+	case catalog.ProviderWowInterface:
+		return "WI"
+	case catalog.ProviderTukui:
+		return "TK"
+	}
+	return "local"
 }
 
 // renderInspect shows the addon detail: TOC compatibility table and
@@ -317,14 +372,86 @@ func (a *App) renderConfirm() string {
 	return lipgloss.Place(a.width, a.height-3, lipgloss.Center, lipgloss.Center, dialog)
 }
 
-// renderInput shows the manual path prompt.
+// renderInput shows the manual path or install-source prompt.
 func (a *App) renderInput() string {
+	title := "WoW installation path"
+	if a.inputMode == inputSource {
+		title = "Install from source (owner/repo or URL)"
+	}
 	dialog := a.styles.Dialog.Render(lipgloss.JoinVertical(lipgloss.Left,
-		a.styles.Section.Render("WoW installation path"),
+		a.styles.Section.Render(title),
 		"\n    "+a.input.View(),
 		"\n\n    "+a.styles.Hint.Render("enter confirm · esc cancel"),
 	))
 	return lipgloss.Place(a.width, a.height-3, lipgloss.Center, lipgloss.Center, dialog)
+}
+
+// renderHelp shows a full-screen keybinding reference in a bordered
+// panel centered on the screen.
+func (a *App) renderHelp() string {
+	width := a.width - 8
+	if width < 60 {
+		width = 60
+	}
+	var b strings.Builder
+	b.WriteString(a.styles.Section.Render("Keybindings"))
+	b.WriteString("\n")
+	for _, g := range a.helpGroups() {
+		b.WriteString("\n")
+		b.WriteString(a.styles.Detail.Render(g.title))
+		b.WriteString("\n")
+		for _, item := range g.items {
+			b.WriteString("  " + a.styles.KeyKey.Render(pad(item.keys, 20)) +
+				a.styles.KeyHint.Render(item.desc))
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n" + a.styles.Hint.Render("esc / q close help"))
+	panel := a.styles.Dialog.Width(width).Render(b.String())
+	return lipgloss.Place(a.width, a.height-3, lipgloss.Center, lipgloss.Center, panel)
+}
+
+// helpGroup is one titled section of the help overlay.
+type helpGroup struct {
+	title string
+	items []helpItem
+}
+
+// helpItem is one binding row: the key chord and its description.
+type helpItem struct {
+	keys string
+	desc string
+}
+
+// helpGroups lists every view's keybindings, sourced from the key map so
+// new bindings appear here automatically.
+func (a *App) helpGroups() []helpGroup {
+	item := func(b key.Binding) helpItem {
+		h := b.Help()
+		return helpItem{keys: h.Key, desc: h.Desc}
+	}
+	group := func(title string, bs ...key.Binding) helpGroup {
+		items := make([]helpItem, 0, len(bs))
+		for _, b := range bs {
+			items = append(items, item(b))
+		}
+		return helpGroup{title: title, items: items}
+	}
+	return []helpGroup{
+		group("Navigation",
+			a.keys.Up, a.keys.Down, a.keys.Enter, a.keys.Escape),
+		group("Addon actions",
+			a.keys.Fix, a.keys.FixAll, a.keys.Delete, a.keys.Rescan,
+			a.keys.Backup, a.keys.Export),
+		group("Views",
+			a.keys.Logs, a.keys.Profile, a.keys.Theme, a.keys.Install,
+			a.keys.Filter, a.keys.Help, a.keys.Quit),
+		group("Catalog",
+			a.keys.Catalog, a.keys.Updates, a.keys.Source,
+			key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "update all (updates view)")),
+			key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search (catalog view)")),
+			a.keys.Enter),
+	}
 }
 
 // filepathDisplay shortens long paths for display.
