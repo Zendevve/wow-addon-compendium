@@ -11,23 +11,27 @@ archives. One binary, no runtime dependencies.
 
 ## Screenshot
 
+The main list (live output of `wowfix preview`, which renders seven panels:
+list, catalog browser, updates, catalog detail, help, collections and
+SavedVariables):
+
 ```
+── LIST ──
 ⚔ wowfix dev C:\Games\World of Warcraft\Interface\AddOns  ·  3.3.5.12340 · Wrath of the Lich King 3.3.5a (expected interface 30300)  ·  flavor root
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ STATUS  ADDON        PROBLEM                          FIX                                          │
-│ ▍ ✖  Inventory      No .toc file found in this folder  Move to Trash                              │
-│    ⚠  Aux           TOC "Aux-Classic.toc" does not m…  Rename Folder                              │
-│    ⚠  DPSMate       Nested folder                      Flatten Folder                             │
-│    ⚠  GFW_Shaman    Vanilla addon                                                               │
-│    ⚠  Questie-main  Folder name "Questie-main" looks …  Rename Folder                            │
-│    ⚠  TempFolder    Folder is empty                    Move to Trash                             │
-│    ✔  AtlasLoot     —                                                                           │
-│    ✔  BigWigs       —                                                                           │
+│ STATUS   ADDON                VERSION  SRC   PROBLEM                            FIX              │
+│ ▍  ✖      Inventory            —        local No .toc file found in this folder  Move to Trash   │
+│   ⚠      Aux                  1.0      local TOC "Aux-Classic.toc" does not ma… Rename Folder    │
+│   ⚠      DPSMate              1.0      local Nested folder                      Flatten Folder   │
+│   ⚠      GFW_Shaman           —        local Vanilla addon                                       │
+│   ⚠      Questie-main         1.12.2   GH    Folder name "Questie-main" looks … Rename Folder    │
+│   ⚠      TempFolder           —        local Folder is empty                    Move to Trash    │
+│   ✔      AtlasLoot            7.0.4    CF    —                                                   │
+│   ✔      BigWigs              —        local —                                                   │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
-Run `wowfix preview` to render live text previews of the list, inspect and
-confirmation screens.
+Full seven-panel preview: run `wowfix preview`.
 
 ## Features
 

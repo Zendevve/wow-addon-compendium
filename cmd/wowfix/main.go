@@ -17,12 +17,14 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/wowfix/wowfix/internal/backup"
+	"github.com/wowfix/wowfix/internal/catalog"
 	"github.com/wowfix/wowfix/internal/config"
 	"github.com/wowfix/wowfix/internal/detector"
 	"github.com/wowfix/wowfix/internal/fixer"
 	"github.com/wowfix/wowfix/internal/installer"
 	"github.com/wowfix/wowfix/internal/logger"
 	"github.com/wowfix/wowfix/internal/models"
+	"github.com/wowfix/wowfix/internal/savedvars"
 	"github.com/wowfix/wowfix/internal/scanner"
 	"github.com/wowfix/wowfix/internal/ui"
 	"github.com/wowfix/wowfix/internal/utils"
@@ -765,6 +767,26 @@ func runDoctor(args []string) error {
 	fmt.Println("wowfix doctor report")
 	fmt.Printf("  config: %s\n", env.store.Path())
 
+	if p := models.ProfileByID(env.cfg.Profile); p == nil {
+		fmt.Printf("  profile: ✖ unknown profile %q (valid: %s)\n",
+			env.cfg.Profile, strings.Join(profileIDs(), ", "))
+	} else {
+		fmt.Printf("  profile: ✔ %s\n", p.ID)
+	}
+	switch env.cfg.Theme {
+	case "dark", "light":
+		fmt.Printf("  theme: ✔ %s\n", env.cfg.Theme)
+	default:
+		fmt.Printf("  theme: ✖ must be dark or light (got %q)\n", env.cfg.Theme)
+	}
+	if env.cfg.Collection == "" {
+		fmt.Println("  collection: ✔ (none set)")
+	} else if utils.Exists(filepath.Join(collectionsDir(env), env.cfg.Collection+".json")) {
+		fmt.Printf("  collection: ✔ %s\n", env.cfg.Collection)
+	} else {
+		fmt.Printf("  collection: ✖ %q not found in %s\n", env.cfg.Collection, collectionsDir(env))
+	}
+
 	if env.install == nil {
 		fmt.Println("  install: none found (use --path or set wow_path in config)")
 	} else {
@@ -803,6 +825,44 @@ func runDoctor(args []string) error {
 		fmt.Printf("  trash fallback: not writable (%v)\n", err)
 	} else {
 		fmt.Printf("  trash fallback: %s (writable)\n", trashDir)
+	}
+
+	regPath, err := catalog.DefaultPath()
+	if err != nil {
+		fmt.Printf("  registry: %v\n", err)
+	} else if !utils.Exists(regPath) {
+		fmt.Println("  registry: none (addons installed via catalog will appear here)")
+	} else if reg, err := catalog.NewRegistry(regPath); err != nil {
+		fmt.Printf("  registry: %v\n", err)
+	} else {
+		fmt.Printf("  registry: OK (%d entries)\n", len(reg.Entries()))
+	}
+
+	colsDir := collectionsDir(env)
+	switch {
+	case !utils.IsDir(colsDir):
+		if env.cfg.CollectionsDir != "" {
+			fmt.Printf("  collections: not configured (%s does not exist)\n", colsDir)
+		} else {
+			fmt.Printf("  collections: not configured (%s)\n", colsDir)
+		}
+	default:
+		if err := utils.IsWritable(colsDir); err != nil {
+			fmt.Printf("  collections: %s (not writable: %v)\n", colsDir, err)
+		} else {
+			fmt.Printf("  collections: %s (writable)\n", colsDir)
+		}
+	}
+
+	if env.install == nil {
+		fmt.Println("  savedvars: WTF not found")
+	} else {
+		wtf := wtfRoot(env.install.Root, env.install.Flavor)
+		if !utils.IsDir(wtf) {
+			fmt.Println("  savedvars: WTF not found")
+		} else {
+			fmt.Printf("  savedvars: %d account(s)\n", len(savedvars.New(wtf, nil).Accounts()))
+		}
 	}
 
 	if env.cfg.Theme != "dark" && env.cfg.Theme != "light" {
