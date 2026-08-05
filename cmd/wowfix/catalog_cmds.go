@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/wowfix/wowfix/internal/backup"
 	"github.com/wowfix/wowfix/internal/catalog"
@@ -114,7 +118,8 @@ func printSearchJSON(addons []*catalog.Addon) error {
 
 // runUpdate implements the `wowfix update [--yes]` command: it checks
 // every registry-tracked addon against its provider and applies the
-// available updates.
+// available updates. With --check it only reports: exit code 0 when no
+// updates are available, 1 when there are, 2 when the check fails.
 func runUpdate(args []string) error {
 	opts, rest, err := parseCLIOptions(args)
 	if err != nil {
@@ -125,17 +130,32 @@ func runUpdate(args []string) error {
 	}
 	env, err := newEnvironment(opts)
 	if err != nil {
-		return err
+		return updateCheckErr(opts, err)
 	}
 	if env.install == nil {
-		return fmt.Errorf("no WoW installation found; use --path or set wow_path in config")
+		return updateCheckErr(opts, fmt.Errorf("no WoW installation found; use --path or set wow_path in config"))
 	}
 	cat, err := newCatalog(env)
 	if err != nil {
-		return err
+		return updateCheckErr(opts, err)
 	}
 
 	updates, checkErr := catalog.Check(context.Background(), cat, cat.Reg, env.install.AddonsPath)
+
+	if opts.check {
+		if checkErr != nil {
+			fmt.Fprintf(os.Stderr, "note: update check partially failed: %s\n", checkErr)
+			return errUpdateCheckFailed
+		}
+		if len(updates) == 0 {
+			fmt.Println("No updates available.")
+			return nil
+		}
+		printUpdateRows(updates)
+		fmt.Printf("%d update(s) available.\n", len(updates))
+		return errUpdatesAvailable
+	}
+
 	if checkErr != nil {
 		fmt.Fprintf(os.Stderr, "note: update check partially failed: %s\n", checkErr)
 	}
@@ -144,22 +164,7 @@ func runUpdate(args []string) error {
 		return nil
 	}
 
-	mismatches := 0
-	for _, u := range updates {
-		latest := "?"
-		family := ""
-		if u.Latest != nil {
-			latest = u.Latest.LatestVersion
-			family = u.Latest.GameVersion
-		}
-		if u.Mismatch {
-			mismatches++
-			fmt.Printf("⚠ %s: %s -> %s (%s, targets %s)\n",
-				u.Entry.Folder, u.Entry.Version, latest, u.Entry.Provider, family)
-			continue
-		}
-		fmt.Printf("%s: %s -> %s (%s)\n", u.Entry.Folder, u.Entry.Version, latest, u.Entry.Provider)
-	}
+	mismatches := printUpdateRows(updates)
 	if !opts.yes && !confirm("Apply %d update(s)?", len(updates)) {
 		fmt.Println("Aborted.")
 		return nil
@@ -194,6 +199,40 @@ func runUpdate(args []string) error {
 		return fmt.Errorf("%d update(s) failed: %s", len(failed), strings.Join(failed, ", "))
 	}
 	return nil
+}
+
+// printUpdateRows prints one row per pending update and returns the
+// number of game-version mismatches among them.
+func printUpdateRows(updates []catalog.Update) int {
+	mismatches := 0
+	for _, u := range updates {
+		latest := "?"
+		family := ""
+		if u.Latest != nil {
+			latest = u.Latest.LatestVersion
+			family = u.Latest.GameVersion
+		}
+		if u.Mismatch {
+			mismatches++
+			fmt.Printf("⚠ %s: %s -> %s (%s, targets %s)\n",
+				u.Entry.Folder, u.Entry.Version, latest, u.Entry.Provider, family)
+			continue
+		}
+		fmt.Printf("%s: %s -> %s (%s)\n", u.Entry.Folder, u.Entry.Version, latest, u.Entry.Provider)
+	}
+	return mismatches
+}
+
+// updateCheckErr maps a setup or check failure onto the `update
+// --check` sentinel: the underlying error is printed as a note on
+// stderr and main exits with code 2. In plain update mode the error is
+// returned unchanged so main prints it normally.
+func updateCheckErr(opts *cliOptions, err error) error {
+	if opts.check {
+		fmt.Fprintf(os.Stderr, "note: %s\n", err)
+		return errUpdateCheckFailed
+	}
+	return err
 }
 
 // runInstallFromSource installs an addon from a URL or provider-scoped
@@ -274,4 +313,280 @@ func truncateRunes(s string, max int) string {
 		return string(r[:max])
 	}
 	return string(r[:max-3]) + "..."
+}
+
+var (
+	infoWowInterfaceIDRe = regexp.MustCompile(`(?i)info(\d+)(?:-|\.)`)
+	infoTukuiIDRe        = regexp.MustCompile(`(?i)/downloads?/([^/?#]+)`)
+
+	mdLinkRe    = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
+	mdCodeRe    = regexp.MustCompile("`([^`]*)`")
+	mdBoldRe    = regexp.MustCompile(`\*\*([^*]*)\*\*`)
+	mdItalicRe  = regexp.MustCompile(`\*([^*]*)\*`)
+	mdHeadingRe = regexp.MustCompile(`(?m)^\s*#{1,6}\s*`)
+)
+
+// runInfo implements the `wowfix info <addon>` command: it resolves an
+// addon from a provider source ("owner/repo" or a provider URL) or by
+// searching a bare name, then prints the catalog details and, for
+// GitHub addons, the latest release notes.
+func runInfo(args []string) error {
+	opts, rest, err := parseCLIOptions(args)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 1 {
+		return fmt.Errorf("usage: wowfix info <addon> (owner/repo, provider URL, or name)")
+	}
+	arg := rest[0]
+
+	env, err := newEnvironment(opts)
+	if err != nil {
+		return err
+	}
+	cat, err := newCatalog(env)
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+
+	var addon *catalog.Addon
+	if strings.Contains(arg, "/") {
+		providerName, id, err := classifySource(arg)
+		if err != nil {
+			return err
+		}
+		prov, ok := cat.Provider(providerName)
+		if !ok {
+			return fmt.Errorf("provider %q is not available", providerName)
+		}
+		addon, err = prov.Resolve(ctx, id)
+		if err != nil {
+			return fmt.Errorf("cannot resolve %q: %w", arg, err)
+		}
+	} else {
+		matches, searchErr := cat.Search(ctx, arg, 5)
+		if searchErr != nil {
+			fmt.Fprintf(os.Stderr, "note: search partially failed: %s\n", searchErr)
+		}
+		switch {
+		case len(matches) == 0:
+			fmt.Printf("No matches for %q.\n", arg)
+			return fmt.Errorf("no matches for %q", arg)
+		case len(matches) > 1:
+			fmt.Printf("Multiple matches for %q:\n", arg)
+			for _, m := range matches {
+				fmt.Printf("  %-10s %-30s %s\n", m.Provider, truncateRunes(m.Name, 29), m.ID)
+			}
+			return fmt.Errorf("addon %q is ambiguous; re-run with an owner/repo or a provider URL", arg)
+		default:
+			addon = matches[0]
+		}
+	}
+
+	if opts.json {
+		return printInfoJSON(addon)
+	}
+	printInfo(addon)
+	return nil
+}
+
+// classifySource classifies an addon argument into a provider name and
+// provider-scoped id, mirroring the catalog's parseSource so `info`
+// needs no catalog API change. It additionally accepts a scheme-less
+// "github.com/owner/repo" form.
+func classifySource(source string) (string, string, error) {
+	s := strings.TrimSpace(source)
+	if s == "" {
+		return "", "", fmt.Errorf("empty addon argument")
+	}
+	lower := strings.ToLower(s)
+	switch {
+	case strings.Contains(lower, "github.com"):
+		owner, repo, err := infoGithubPath(s)
+		if err != nil {
+			return "", "", err
+		}
+		return catalog.ProviderGitHub, owner + "/" + repo, nil
+	case strings.Contains(lower, "curseforge.com"):
+		slug, err := infoCurseSlug(s)
+		if err != nil {
+			return "", "", err
+		}
+		return catalog.ProviderCurseForge, slug, nil
+	case strings.Contains(lower, "wowinterface.com"):
+		m := infoWowInterfaceIDRe.FindStringSubmatch(s)
+		if m == nil {
+			return "", "", fmt.Errorf("cannot parse WowInterface URL %q (expected .../info<id>-<slug>.html)", source)
+		}
+		return catalog.ProviderWowInterface, m[1], nil
+	case strings.Contains(lower, "tukui.org"):
+		m := infoTukuiIDRe.FindStringSubmatch(s)
+		if m == nil {
+			return "", "", fmt.Errorf("cannot parse Tukui URL %q (expected .../downloads/<id>)", source)
+		}
+		return catalog.ProviderTukui, m[1], nil
+	case strings.Contains(s, "/"):
+		owner, repo, err := infoGithubPath(s)
+		if err != nil {
+			return "", "", err
+		}
+		return catalog.ProviderGitHub, owner + "/" + repo, nil
+	default:
+		return "", "", fmt.Errorf("unknown addon %q", source)
+	}
+}
+
+// infoGithubPath extracts owner and repo from "owner/repo" or a
+// github.com URL, ignoring any trailing segments. Unlike the catalog's
+// classifier it also accepts a scheme-less "github.com/owner/repo".
+func infoGithubPath(s string) (owner, repo string, err error) {
+	u := s
+	if strings.Contains(strings.ToLower(s), "github.com") {
+		parsed, err := url.Parse(s)
+		if err != nil {
+			return "", "", fmt.Errorf("invalid GitHub URL %q: %w", s, err)
+		}
+		u = parsed.Path
+	}
+	u = strings.Trim(u, "/")
+	parts := strings.Split(u, "/")
+	if len(parts) > 1 && (strings.EqualFold(parts[0], "github.com") || strings.EqualFold(parts[0], "www.github.com")) {
+		parts = parts[1:]
+	}
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("GitHub source %q must be owner/repo", s)
+	}
+	return parts[0], parts[1], nil
+}
+
+// infoCurseSlug extracts the addon slug from a CurseForge URL path
+// such as /wow/addons/<slug>.
+func infoCurseSlug(s string) (string, error) {
+	parsed, err := url.Parse(s)
+	if err != nil {
+		return "", fmt.Errorf("invalid CurseForge URL %q: %w", s, err)
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	for i, p := range parts {
+		if strings.EqualFold(p, "addons") && i+1 < len(parts) && parts[i+1] != "" {
+			return parts[i+1], nil
+		}
+	}
+	return "", fmt.Errorf("cannot parse CurseForge URL %q (expected .../wow/addons/<slug>)", s)
+}
+
+// printInfo prints one addon's catalog details in a stable field order.
+func printInfo(addon *catalog.Addon) {
+	fmt.Printf("Name:          %s\n", addon.Name)
+	fmt.Printf("Provider:      %s\n", addon.Provider)
+	fmt.Printf("ID:            %s\n", addon.ID)
+	fmt.Printf("Author:        %s\n", addon.Author)
+	fmt.Printf("LatestVersion: %s\n", addon.LatestVersion)
+	fmt.Printf("GameVersion:   %s\n", addon.GameVersion)
+	fmt.Printf("Homepage:      %s\n", addon.Homepage)
+	updated := ""
+	if !addon.UpdatedAt.IsZero() {
+		updated = addon.UpdatedAt.Format(time.RFC1123)
+	}
+	fmt.Printf("UpdatedAt:     %s\n", updated)
+	if addon.Provider != catalog.ProviderGitHub {
+		return
+	}
+	notes, err := infoReleaseNotes(addon)
+	if err != nil || strings.TrimSpace(notes) == "" {
+		fmt.Println("Release notes: release notes unavailable")
+		return
+	}
+	lines := strings.Split(notes, "\n")
+	if len(lines) > 20 {
+		lines = lines[:20]
+	}
+	fmt.Println("Release notes:")
+	for _, l := range lines {
+		fmt.Println("  " + l)
+	}
+}
+
+// printInfoJSON renders one addon's details as JSON. Release notes are
+// best-effort: an empty string means they could not be fetched.
+func printInfoJSON(addon *catalog.Addon) error {
+	out := map[string]any{
+		"provider":      addon.Provider,
+		"id":            addon.ID,
+		"name":          addon.Name,
+		"author":        addon.Author,
+		"version":       addon.LatestVersion,
+		"game_version":  addon.GameVersion,
+		"homepage":      addon.Homepage,
+		"updated_at":    addon.UpdatedAt,
+		"release_notes": "",
+	}
+	if addon.Provider == catalog.ProviderGitHub {
+		if notes, err := infoReleaseNotes(addon); err == nil {
+			out["release_notes"] = notes
+		}
+	}
+	return printJSON(out)
+}
+
+// infoReleaseNotes fetches the latest GitHub release notes for the
+// addon's repository, stripped of markdown formatting. Any failure
+// (network, rate limit, no release) returns an error; callers degrade
+// to "release notes unavailable" instead of failing the command.
+func infoReleaseNotes(addon *catalog.Addon) (string, error) {
+	owner, repo, ok := strings.Cut(addon.ID, "/")
+	if !ok || owner == "" || repo == "" || strings.Contains(repo, "/") {
+		return "", fmt.Errorf("github: not an owner/repo id")
+	}
+	u := "https://api.github.com/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/releases/latest"
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("github: unexpected status %d", resp.StatusCode)
+	}
+	var rel struct {
+		Body string `json:"body"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return "", err
+	}
+	return stripMarkdown(rel.Body), nil
+}
+
+// stripMarkdown reduces release-note markdown to plain text: headings,
+// bold/italic emphasis, inline code and links keep their content while
+// the syntax is dropped, and blank lines are collapsed.
+func stripMarkdown(s string) string {
+	s = mdLinkRe.ReplaceAllString(s, "$1")
+	s = mdCodeRe.ReplaceAllString(s, "$1")
+	s = mdBoldRe.ReplaceAllString(s, "$1")
+	s = mdItalicRe.ReplaceAllString(s, "$1")
+	s = mdHeadingRe.ReplaceAllString(s, "")
+	lines := strings.Split(s, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			if len(out) > 0 && out[len(out)-1] != "" {
+				out = append(out, "")
+			}
+			continue
+		}
+		out = append(out, line)
+	}
+	for len(out) > 0 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
+	}
+	return strings.Join(out, "\n")
 }

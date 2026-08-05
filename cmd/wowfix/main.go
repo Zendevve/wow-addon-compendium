@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -38,6 +39,14 @@ var (
 	date    = "unknown"
 )
 
+// Sentinel errors mapped to exit codes by main: `wowfix update --check`
+// exits 1 when updates are available and 2 when the check fails, so
+// scripts can branch on the result.
+var (
+	errUpdatesAvailable  = errors.New("updates available")
+	errUpdateCheckFailed = errors.New("update check failed")
+)
+
 const usage = `wowfix — World of Warcraft addon fixer
 
 Usage:
@@ -49,7 +58,9 @@ Usage:
   wowfix validate               validate TOC compatibility
   wowfix list                   list addons with status
   wowfix search <query>         search the addon catalog
+  wowfix info <addon>           show details for an addon (name, URL or owner/repo)
   wowfix update [--yes]         check and apply addon updates
+  wowfix update --check         check only; exit code 0 none, 1 updates, 2 check error
   wowfix sources                list catalog providers and their caveats
   wowfix backup                 snapshot all addons
   wowfix restore [id]           list backups, or restore one
@@ -82,8 +93,17 @@ func main() {
 		args = append([]string{"install"}, args...)
 	}
 	if err := run(args); err != nil {
-		fmt.Fprintln(os.Stderr, "wowfix: "+err.Error())
-		os.Exit(1)
+		switch {
+		case errors.Is(err, errUpdatesAvailable):
+			// The update summary is already on stdout.
+			os.Exit(1)
+		case errors.Is(err, errUpdateCheckFailed):
+			// The failure note is already on stderr.
+			os.Exit(2)
+		default:
+			fmt.Fprintln(os.Stderr, "wowfix: "+err.Error())
+			os.Exit(1)
+		}
 	}
 }
 
@@ -124,6 +144,8 @@ func run(args []string) error {
 		return runList(rest)
 	case "search":
 		return runSearch(rest)
+	case "info":
+		return runInfo(rest)
 	case "update":
 		return runUpdate(rest)
 	case "sources":
@@ -153,9 +175,10 @@ func run(args []string) error {
 
 // cliOptions carries the shared flag values for every command.
 type cliOptions struct {
-	path string
-	yes  bool
-	json bool
+	path  string
+	yes   bool
+	json  bool
+	check bool // update --check: report pending updates without applying
 }
 
 // parseCLIOptions splits the shared flags from the positional
@@ -176,6 +199,8 @@ func parseCLIOptions(args []string) (*cliOptions, []string, error) {
 			opts.yes = true
 		case a == "--json" || a == "-j":
 			opts.json = true
+		case a == "--check":
+			opts.check = true
 		case strings.HasPrefix(a, "-"):
 			return nil, nil, fmt.Errorf("unknown flag %q", a)
 		default:

@@ -5,7 +5,7 @@ folder, finds the common addon installation problems, repairs them safely (with
 backups and trash), validates TOC compatibility, and installs addons from ZIP
 archives. One binary, no runtime dependencies.
 
-![Go](https://img.shields.io/badge/Go-1.23+-00ADD8) ![Platform](https://img.shields.io/badge/Windows-Linux-macOS-lightgrey)
+![Go](https://img.shields.io/badge/Go-1.23+-00ADD8) ![Platform](https://img.shields.io/badge/Windows-Linux-macOS-lightgrey) ![CI](https://img.shields.io/github/actions/workflow/status/Zendevve/wow-addon-compendium/ci.yml?branch=main)
 
 ---
 
@@ -356,18 +356,27 @@ same engine, so the whole feature set is available from both.
 
 ```sh
 go test ./...
+go test ./internal/e2e/ -count=1 -v   # end-to-end pipeline: scan -> fix -> backup/restore -> install
 go vet ./...
 ```
 
 The scanner and validator have unit tests covering every detection rule and
-every compatibility classification. A manual smoke-test fixture lives in
-`testdata/wow`:
+every compatibility classification. The `internal/e2e` test drives the whole
+pipeline against a fake `Interface/AddOns` tree in a temp dir: it scans the
+fixture, fixes every problem (with backups and trash), restores a corrupted
+tree from a snapshot and installs addons from a ZIP archive. A manual
+smoke-test fixture lives in `testdata/wow`:
 
 ```sh
 wowfix scan     --path testdata/wow
 wowfix fix      --path testdata/wow --yes
 wowfix restore  --path testdata/wow
 ```
+
+**CI** — a GitHub Actions workflow (`.github/workflows/ci.yml`) runs
+`gofmt`, `go vet`, `go test` and `go build` on Ubuntu and Windows for every
+push/PR touching Go sources, and cross-compiles the CLI for
+linux/amd64, darwin/arm64 and windows/amd64.
 
 ## Extensibility
 
