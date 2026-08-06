@@ -5,11 +5,15 @@ folder, finds the common addon installation problems, repairs them safely (with
 backups and trash), validates TOC compatibility, and installs addons from ZIP
 archives. One binary, no runtime dependencies.
 
-![Go](https://img.shields.io/badge/Go-1.23+-00ADD8) ![Platform](https://img.shields.io/badge/Windows-Linux-macOS-lightgrey) ![CI](https://img.shields.io/github/actions/workflow/status/Zendevve/wow-addon-compendium/ci.yml?branch=main)
+![Go](https://img.shields.io/badge/Go-1.23+-00ADD8) ![Platform](https://img.shields.io/badge/Windows-Linux-macOS-lightgrey) ![CI](https://img.shields.io/github/actions/workflow/status/Zendevve/wow-addon-compendium/ci.yml?branch=main) ![Release](https://img.shields.io/github/v/release/Zendevve/wow-addon-compendium)
 
 ---
 
 ## Screenshot
+
+Live demo (recorded with [VHS](https://github.com/charmbracelet/vhs)):
+
+![wowfix demo](demo.gif)
 
 The main list (live output of `wowfix preview`, which renders seven panels:
 list, catalog browser, updates, catalog detail, help, collections and
@@ -377,6 +381,11 @@ wowfix restore  --path testdata/wow
 `gofmt`, `go vet`, `go test` and `go build` on Ubuntu and Windows for every
 push/PR touching Go sources, and cross-compiles the CLI for
 linux/amd64, darwin/arm64 and windows/amd64.
+
+The animated demo in the README is driven by `demo.tape`. Re-record it
+with [VHS](https://github.com/charmbracelet/vhs) (`vhs demo.tape`); the
+tape uses an isolated config via the `APPDATA` environment variable so
+your real `wowfix` config is never touched.
 
 ## Extensibility
 
