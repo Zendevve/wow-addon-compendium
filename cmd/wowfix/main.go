@@ -277,6 +277,14 @@ func (e *environment) scan(ctx context.Context) (*models.ScanResult, error) {
 	if e.install == nil {
 		return nil, fmt.Errorf("no WoW installation found")
 	}
+	// Installations accepted without an AddOns folder (fresh clients,
+	// exe-only private-server dirs) get one created so scanning and
+	// installing work immediately.
+	if created, err := detector.EnsureAddons(e.install); err != nil {
+		return nil, err
+	} else if created {
+		e.log.Infof("Created Interface\\AddOns at %s", e.install.AddonsPath)
+	}
 	return scanner.New(e.install.AddonsPath, e.profile).Scan(ctx)
 }
 
