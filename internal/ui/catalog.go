@@ -338,6 +338,7 @@ func (a *App) refreshAfterUpdate() tea.Cmd {
 		return nil
 	}
 	a.recheckAfterScan = true
+	a.scanOrigin = scanOriginRescan
 	return a.scanCmd(a.install.Root, a.install.Flavor)
 }
 
@@ -825,35 +826,41 @@ func stripMarkdown(s string) string {
 }
 
 func (a *App) renderCatalog() string {
-	width := a.width - 4
+	width := a.contentWidth()
 	if width < 60 {
 		width = 60
 	}
+	st := a.styles
 	var b strings.Builder
-	head := "Catalog · sort: " + a.catalogSort
+	meta := "sort: " + a.catalogSort
 	if a.catalogFilter != "" {
-		head += " · filter: " + a.catalogFilter
+		meta += "  ·  filter: " + a.catalogFilter
 	}
-	b.WriteString(a.styles.Section.Render(head))
-	b.WriteString("\n")
-	b.WriteString(a.styles.FilterBar.Render(a.search.View()))
+	b.WriteString(a.renderViewHeader("Catalog", meta, width))
+	b.WriteString(st.FilterBar.Render(a.search.View()))
 	b.WriteString("\n")
 
-	if a.catalog == nil {
-		b.WriteString(a.styles.Hint.Render("Catalog unavailable: " + a.catErr.Error()))
-	} else if a.searchPending || a.searching {
-		b.WriteString(a.styles.Hint.Render(a.spinner.View() + " searching…"))
-	} else if len(a.catalogRows()) == 0 {
-		if a.search.Value() == "" {
-			b.WriteString(a.styles.Hint.Render(
-				"Type to search GitHub, CurseForge, WowInterface and Tukui."))
-		} else if a.catalogFilter != "" {
-			b.WriteString(a.styles.Hint.Render(fmt.Sprintf(
-				"No %s addons match %q", a.catalogFilter, a.search.Value())))
-		} else {
-			b.WriteString(a.styles.Hint.Render(fmt.Sprintf("No results for %q", a.search.Value())))
+	switch {
+	case a.catalog == nil:
+		b.WriteString(a.renderEmptyState("Catalog unavailable.", a.catErr.Error()))
+	case a.searchPending || a.searching:
+		b.WriteString(st.RowMuted.Render(a.spinner.View() + " searching…"))
+	case len(a.catalogRows()) == 0:
+		switch {
+		case a.search.Value() == "":
+			b.WriteString(a.renderEmptyState(
+				"Search the catalog.",
+				"type a name and press / to search GitHub, CurseForge, WowInterface, Tukui"))
+		case a.catalogFilter != "":
+			b.WriteString(a.renderEmptyState(
+				fmt.Sprintf("No %s addons match %q.", a.catalogFilter, a.search.Value()),
+				"W cycle filter · S sort · esc back"))
+		default:
+			b.WriteString(a.renderEmptyState(
+				fmt.Sprintf("No results for %q.", a.search.Value()),
+				"try a shorter name · esc back"))
 		}
-	} else {
+	default:
 		rows := a.catalogRows()
 		vis := a.visibleRows()
 		start := 0
@@ -867,42 +874,86 @@ func (a *App) renderCatalog() string {
 		updatedW := 10
 		for i := start; i < end; i++ {
 			r := rows[i]
-			mark := " "
-			if i == a.resultCur {
-				mark = "▸"
-			}
+			selected := i == a.resultCur
 			name := r.Name
 			if r.Author != "" {
 				name += "  by " + r.Author
 			}
-			prefix := fmt.Sprintf("%s %s [%s]", mark, name, providerTag(r.Provider))
+			tag := providerTag(r.Provider)
+			ver := ""
 			if r.LatestVersion != "" {
-				prefix += "  v" + r.LatestVersion
+				ver = "  v" + r.LatestVersion
 			}
-			// The summary column takes whatever width remains and clamps
-			// at a minimum, mirroring the PROBLEM column in the main list.
+			// Lay the row out in plain text first so the truncate/pad
+			// helpers work on runes, then apply styles at the end.
+			prefix := fmt.Sprintf("%s%s [%s]%s", a.pickerMarker(selected), name, tag, ver)
+			// The prefix is elastic too: truncate it so the summary
+			// keeps its minimum width instead of overflowing the line.
+			prefixMax := width - updatedW - 3 - 12
+			if prefixMax < 8 {
+				prefixMax = 8
+			}
+			prefix = truncate(prefix, prefixMax)
 			summaryW := width - lipgloss.Width(prefix) - updatedW - 3
 			if summaryW < 12 {
 				summaryW = 12
 			}
 			summary := strings.ReplaceAll(r.Summary, "\n", " ")
-			line := fmt.Sprintf("%s %s %s",
-				prefix, pad(relTime(r.UpdatedAt), updatedW), truncate(summary, summaryW))
-			if i == a.resultCur {
-				b.WriteString(a.styles.RowSelected.Render(pad(line, width)))
-			} else {
-				b.WriteString(a.styles.Row.Render(pad(line, width)))
-			}
-			b.WriteString("\n")
+			line := fmt.Sprintf("%s %s %s", prefix, pad(relTime(r.UpdatedAt), updatedW), truncate(summary, summaryW))
+			b.WriteString(a.renderCatalogRow(line, selected, width))
 		}
 		if len(rows) > end {
-			b.WriteString(a.styles.RowMuted.Render(fmt.Sprintf("… %d more", len(rows)-end)))
-			b.WriteString("\n")
+			b.WriteString("\n" + st.RowMuted.Render(fmt.Sprintf("… %d more", len(rows)-end)))
 		}
+		b.WriteString("\n" + a.renderCatalogSummary(rows))
 	}
-	b.WriteString("\n" + a.styles.Hint.Render(
-		"/ search · S sort · W filter · enter open · d details · esc back · q quit"))
-	return a.styles.ListBox.Width(width + 2).Render(b.String())
+	b.WriteString(a.renderFooterHints([]string{
+		a.hintChip("↑/k", "up"),
+		a.hintChip("↓/j", "down"),
+		a.hintChip("/", "search"),
+		a.hintChip("S", "sort"),
+		a.hintChip("W", "filter"),
+		a.hintChip("enter", "open"),
+		a.hintChip("d", "details"),
+		a.hintChip("esc", "back"),
+	}))
+	return st.ListBox.Width(a.width).Render(b.String())
+}
+
+// pickerMarker returns the left-side row marker: ▸ when selected, two
+// spaces otherwise. It keeps the gutter aligned across the catalog,
+// updates, profiles and savedvars lists.
+func (a *App) pickerMarker(selected bool) string {
+	if selected {
+		return "▸ "
+	}
+	return "  "
+}
+
+// renderRowLine applies the per-row selection style to a pre-built
+// line of text. Kept here so the catalog, updates, profiles and
+// savedvars views share one selection treatment.
+func (a *App) renderRowLine(line string, selected bool, width int) string {
+	padded := padToVisibleWidth(line, width)
+	if selected {
+		return a.styles.RowSelected.Render(padded) + "\n"
+	}
+	return a.styles.Row.Render(padded) + "\n"
+}
+
+// renderCatalogRow applies the selection style to a plain-text row
+// already laid out to the target visible width.
+func (a *App) renderCatalogRow(line string, selected bool, width int) string {
+	return a.renderRowLine(line, selected, width)
+}
+
+// renderCatalogSummary renders the catalog footer summary: result
+// count and a small badge of the active sort + filter.
+func (a *App) renderCatalogSummary(rows []*catalog.Addon) string {
+	st := a.styles
+	n := len(rows)
+	count := st.SummaryN.Render(fmt.Sprintf("%d", n)) + st.Summary.Render(" result"+plural(n))
+	return st.Summary.Render(count)
 }
 
 // renderCatalogDetail draws the addon detail panel: metadata plus, for
@@ -1037,19 +1088,27 @@ func versionOrDash(v string) string {
 }
 
 func (a *App) renderUpdates() string {
-	width := a.width - 4
+	width := a.contentWidth()
 	if width < 60 {
 		width = 60
 	}
+	st := a.styles
 	var b strings.Builder
-	b.WriteString(a.styles.Section.Render("Updates"))
-	b.WriteString("\n")
+	meta := ""
+	if a.updates == nil {
+		meta = "checking…"
+	} else {
+		meta = fmt.Sprintf("%d available  ·  %d up to date", len(a.updates), a.upToDate)
+		if total := updateMismatchCount(a.updates); total > 0 {
+			meta += fmt.Sprintf("  ·  %d for a different game version", total)
+		}
+	}
+	b.WriteString(a.renderViewHeader("Updates", meta, width))
 
 	if a.updates == nil {
-		b.WriteString(a.styles.Hint.Render("Checking for updates…"))
+		b.WriteString(a.renderEmptyState("Checking for updates…", a.spinner.View()+" working"))
 	} else if len(a.updates) == 0 {
-		b.WriteString(a.styles.Hint.Render("All tracked addons are up to date."))
-		b.WriteString("\n")
+		b.WriteString(a.renderEmptyState("All tracked addons are up to date.", "u re-check · esc back"))
 	} else {
 		rows := a.visibleRows()
 		start := 0
@@ -1062,48 +1121,58 @@ func (a *App) renderUpdates() string {
 		}
 		for i := start; i < end; i++ {
 			u := a.updates[i]
-			mark := " "
-			if i == a.updatesCur {
-				mark = "▸"
-			}
+			selected := i == a.updatesCur
 			latest := "—"
 			if u.Latest != nil {
 				latest = versionOrDash(u.Latest.LatestVersion)
 			}
 			folder := u.Entry.Folder
+			warn := ""
 			if u.Mismatch {
 				folder = "⚠ " + folder
+				if u.Latest != nil && u.Latest.GameVersion != "" {
+					warn = "targets " + u.Latest.GameVersion
+				}
 			}
-			line := fmt.Sprintf("%s %s  %s -> %s [%s]",
-				mark, folder,
-				versionOrDash(u.Entry.Version), latest,
-				providerTag(u.Entry.Provider))
-			if i == a.updatesCur {
-				b.WriteString(a.styles.RowSelected.Render(pad(line, width)))
-			} else {
-				b.WriteString(a.styles.Row.Render(pad(line, width)))
-			}
-			b.WriteString("\n")
-			if u.Mismatch && u.Latest != nil && u.Latest.GameVersion != "" {
-				b.WriteString(a.styles.RowMuted.Render("  targets " + u.Latest.GameVersion))
+			// The folder is the elastic field; everything else on the
+			// line is short. Truncate it so long addon names cannot
+			// push the row past the panel edge.
+			folder = truncate(folder, maxInt(8, width-34))
+			tag := st.Badge.Render(" " + providerTag(u.Entry.Provider) + " ")
+			line := fmt.Sprintf("%s%s  %s  %s %s %s",
+				a.pickerMarker(selected), folder, tag,
+				st.RowMuted.Render(versionOrDash(u.Entry.Version)),
+				st.RowMuted.Render("→"),
+				latest,
+			)
+			b.WriteString(a.renderRowLine(line, selected, width))
+			if warn != "" {
+				b.WriteString(st.StatusWarn.Render(pad(truncate("    "+warn, width), width)))
 				b.WriteString("\n")
 			}
 		}
-		mismatches := 0
-		for _, u := range a.updates {
-			if u.Mismatch {
-				mismatches++
-			}
-		}
-		summary := fmt.Sprintf("%d available", len(a.updates))
-		if mismatches > 0 {
-			summary += fmt.Sprintf(", %d for a different game version", mismatches)
-		}
-		b.WriteString("\n" + a.styles.RowMuted.Render(summary))
-		b.WriteString("\n")
 	}
-	b.WriteString(a.styles.Hint.Render("u update · U update all · enter inspect · esc back · q quit"))
-	return a.styles.ListBox.Width(width + 2).Render(b.String())
+	b.WriteString(a.renderFooterHints([]string{
+		a.hintChip("↑/k", "up"),
+		a.hintChip("↓/j", "down"),
+		a.hintChip("u", "update"),
+		a.hintChip("U", "update all"),
+		a.hintChip("enter", "inspect"),
+		a.hintChip("esc", "back"),
+	}))
+	return st.ListBox.Width(a.width).Render(b.String())
+}
+
+// updateMismatchCount returns how many tracked updates target a
+// different game version than the active profile.
+func updateMismatchCount(updates []catalog.Update) int {
+	n := 0
+	for _, u := range updates {
+		if u.Mismatch {
+			n++
+		}
+	}
+	return n
 }
 
 func (a *App) renderUpdatesDetail() string {

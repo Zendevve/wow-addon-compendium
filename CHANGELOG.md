@@ -6,6 +6,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Manual path entry accepts `Interface\AddOns` paths** — pasting an
+  AddOns (or `Interface`) folder into the path prompt now resolves back to
+  the game root and flavor instead of failing with `not a directory`. The
+  same input works for `wowfix --path`.
+- **Clearer path errors** — the scan path error now distinguishes a missing
+  path (`path does not exist`), a non-directory (`not a directory`) and a
+  root without an AddOns folder, so a bad manual entry is actionable.
+- **No more dead-end picker bounce** — when a manually entered or saved
+  path fails to scan, the UI returns to the path prompt with the value
+  prefilled instead of dropping the user in an empty picker with a second
+  `No WoW installation auto-detected` toast.
+
+### Added
+
+- **Private-server client detection** — a folder is accepted as a WoW
+  installation when it contains a known client executable (`wow.exe`,
+  `WowClassic_TBC.exe`, `wow-64.exe`, …) or an `Interface` folder, even
+  when `Interface\AddOns` does not exist yet. The folder is created on the
+  first scan so fresh or partial clients work immediately (UI and CLI).
+- **Clipboard in text inputs** — `ctrl+v` pastes into the focused input
+  (path, filter, catalog search) at the cursor, and `ctrl+y` copies its
+  value. `ctrl+c` still quits; terminal-native copy shortcuts keep working.
+
+### Changed
+
+- **TUI visual redesign** — the whole interface now shares one design
+  language: a structured header that stays on one line (path middle-
+  truncates), a reworked addon list where the problem is always visible
+  (status · addon · problem · version · source · fix), two-line
+  installation picker, severity-colored toasts, actionable empty states,
+  a per-view summary line ("N addons · K with issues · E errors"), a
+  two-column help overlay and width-constrained rows in every list
+  (catalog, updates, profiles, SavedVariables, logs).
+
 ## [1.0.0] - 2026-08-05
 
 ### Added

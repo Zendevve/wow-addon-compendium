@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -57,6 +58,10 @@ func keyPress(key string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyBackspace}
 	case "ctrl+c":
 		return tea.KeyMsg{Type: tea.KeyCtrlC}
+	case "ctrl+v":
+		return tea.KeyMsg{Type: tea.KeyCtrlV}
+	case "ctrl+y":
+		return tea.KeyMsg{Type: tea.KeyCtrlY}
 	default:
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
 	}
@@ -554,5 +559,251 @@ func TestSearchShowsSearchingHint(t *testing.T) {
 	app.searchPending = true
 	if !strings.Contains(app.View(), "searching") {
 		t.Fatal("catalog view should show a searching hint while a debounce is pending")
+	}
+}
+
+// --- scan-origin failure routing --------------------------------------
+
+func TestScanFailureManualGoesToInput(t *testing.T) {
+	app := newTestApp(t)
+	app.scanOrigin = scanOriginManual
+	app.cfg.WoWPath = "D:\\Games\\WoW"
+	_, cmd := app.Update(scanResultMsg{err: errors.New("boom")})
+	if app.view != viewInput {
+		t.Fatalf("view = %v, want viewInput", app.view)
+	}
+	if app.inputMode != inputPath {
+		t.Fatalf("inputMode = %v, want inputPath", app.inputMode)
+	}
+	if got := app.input.Value(); got != "D:\\Games\\WoW" {
+		t.Fatalf("input value = %q, want %q", got, "D:\\Games\\WoW")
+	}
+	if !app.input.Focused() {
+		t.Fatal("input should be focused after a manual scan failure")
+	}
+	if app.busy {
+		t.Fatal("busy should be false after a failed scan")
+	}
+	if cmd != nil {
+		t.Fatal("manual failure must not re-run auto-detection (cmd should be nil)")
+	}
+}
+
+func TestScanFailureConfigGoesToInput(t *testing.T) {
+	app := newTestApp(t)
+	app.scanOrigin = scanOriginConfig
+	app.cfg.WoWPath = "D:\\Games\\WoW"
+	_, cmd := app.Update(scanResultMsg{err: errors.New("boom")})
+	if app.view != viewInput {
+		t.Fatalf("view = %v, want viewInput", app.view)
+	}
+	if app.inputMode != inputPath {
+		t.Fatalf("inputMode = %v, want inputPath", app.inputMode)
+	}
+	if got := app.input.Value(); got != "D:\\Games\\WoW" {
+		t.Fatalf("input value = %q, want %q", got, "D:\\Games\\WoW")
+	}
+	if !app.input.Focused() {
+		t.Fatal("input should be focused after a config scan failure")
+	}
+	if app.busy {
+		t.Fatal("busy should be false after a failed scan")
+	}
+	if cmd != nil {
+		t.Fatal("config failure must not re-run auto-detection (cmd should be nil)")
+	}
+}
+
+func TestScanFailurePickerKeepsPicker(t *testing.T) {
+	app := newTestApp(t)
+	app.scanOrigin = scanOriginPicker
+	_, cmd := app.Update(scanResultMsg{err: errors.New("boom")})
+	if app.view != viewPicker {
+		t.Fatalf("view = %v, want viewPicker", app.view)
+	}
+	if cmd == nil {
+		t.Fatal("picker failure should re-run detection (cmd must be non-nil)")
+	}
+}
+
+func TestManualPathEntrySetsOrigin(t *testing.T) {
+	app := newTestApp(t)
+	app.view = viewPicker
+	app.Update(keyPress("s")) // Install: open the manual path input
+	if app.view != viewInput {
+		t.Fatalf("view after Install key = %v, want viewInput", app.view)
+	}
+	app.input.SetValue("D:\\Games\\WoW")
+	_, cmd := app.Update(keyPress("enter"))
+	if app.scanOrigin != scanOriginManual {
+		t.Fatalf("scanOrigin = %q, want %q", app.scanOrigin, scanOriginManual)
+	}
+	if got := app.cfg.WoWPath; got != "D:\\Games\\WoW" {
+		t.Fatalf("cfg.WoWPath = %q, want %q", got, "D:\\Games\\WoW")
+	}
+	if cmd == nil {
+		t.Fatal("expected a scan cmd from the manual path Enter")
+	}
+}
+
+func TestPickerSelectionSetsOrigin(t *testing.T) {
+	app := newTestApp(t)
+	app.view = viewPicker
+	app.picker = []detector.Installation{{
+		Root:       "C:\\Games\\WoW",
+		Flavor:     "_retail_",
+		AddonsPath: "C:\\Games\\WoW\\_retail_\\Interface\\AddOns",
+		Confidence: "medium",
+	}}
+	_, cmd := app.Update(keyPress("enter"))
+	if app.scanOrigin != scanOriginPicker {
+		t.Fatalf("scanOrigin = %q, want %q", app.scanOrigin, scanOriginPicker)
+	}
+	if got := app.cfg.WoWPath; got != "C:\\Games\\WoW" {
+		t.Fatalf("cfg.WoWPath = %q, want %q", got, "C:\\Games\\WoW")
+	}
+	if cmd == nil {
+		t.Fatal("expected a scan cmd from picker Enter")
+	}
+}
+
+// swapClipboard replaces the clipboard seams for the duration of a test
+// and returns a cleanup that restores them. Nil args become safe stubs
+// so tests never touch the real system clipboard.
+func swapClipboard(read func() (string, error), write func(string) error) func() {
+	oldRead, oldWrite := clipboardRead, clipboardWrite
+	if read == nil {
+		read = func() (string, error) { return "", errors.New("stubbed read") }
+	}
+	if write == nil {
+		write = func(string) error { return nil }
+	}
+	clipboardRead, clipboardWrite = read, write
+	return func() {
+		clipboardRead, clipboardWrite = oldRead, oldWrite
+	}
+}
+
+func toastTexts(app *App) []string {
+	texts := make([]string, 0, len(app.toasts))
+	for _, ts := range app.toasts {
+		texts = append(texts, ts.text)
+	}
+	return texts
+}
+
+func hasToast(app *App, want string) bool {
+	for _, text := range toastTexts(app) {
+		if strings.Contains(text, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestPasteInsertsAtCursor(t *testing.T) {
+	app := newTestApp(t)
+	app.view = viewInput
+	app.inputMode = inputPath
+	app.input.SetValue("abcd")
+	app.input.SetCursor(1)
+	t.Cleanup(swapClipboard(func() (string, error) { return "XYZ", nil }, nil))
+	app.Update(keyPress("ctrl+v"))
+	if got := app.input.Value(); got != "aXYZbcd" {
+		t.Fatalf("input = %q, want %q", got, "aXYZbcd")
+	}
+	if pos := app.input.Position(); pos != 4 {
+		t.Fatalf("cursor = %d, want 4", pos)
+	}
+}
+
+func TestPasteEmptyClipboard(t *testing.T) {
+	app := newTestApp(t)
+	app.view = viewInput
+	app.inputMode = inputPath
+	app.input.SetValue("x")
+	t.Cleanup(swapClipboard(func() (string, error) { return "", nil }, nil))
+	app.Update(keyPress("ctrl+v"))
+	if got := app.input.Value(); got != "x" {
+		t.Fatalf("input = %q, want unchanged %q", got, "x")
+	}
+	if len(app.toasts) == 0 {
+		t.Fatal("expected a toast for an empty clipboard")
+	}
+}
+
+func TestPasteFailure(t *testing.T) {
+	app := newTestApp(t)
+	app.view = viewInput
+	app.inputMode = inputPath
+	app.input.SetValue("x")
+	t.Cleanup(swapClipboard(func() (string, error) { return "", errors.New("boom") }, nil))
+	app.Update(keyPress("ctrl+v"))
+	if !hasToast(app, "Paste failed") {
+		t.Fatalf("expected a Paste failed toast, got %v", toastTexts(app))
+	}
+}
+
+func TestCopyInputValue(t *testing.T) {
+	app := newTestApp(t)
+	app.view = viewInput
+	app.inputMode = inputPath
+	app.input.SetValue("D:\\Games\\WoW")
+	var captured string
+	t.Cleanup(swapClipboard(nil, func(s string) error { captured = s; return nil }))
+	app.Update(keyPress("ctrl+y"))
+	if captured != "D:\\Games\\WoW" {
+		t.Fatalf("copied = %q, want %q", captured, "D:\\Games\\WoW")
+	}
+	if !hasToast(app, "Copied") {
+		t.Fatalf("expected a Copied toast, got %v", toastTexts(app))
+	}
+}
+
+func TestCopyFilterValue(t *testing.T) {
+	app := newTestApp(t)
+	app.filtering = true
+	app.filter.SetValue("quest")
+	var captured string
+	t.Cleanup(swapClipboard(nil, func(s string) error { captured = s; return nil }))
+	app.Update(keyPress("ctrl+y"))
+	if captured != "quest" {
+		t.Fatalf("copied = %q, want %q", captured, "quest")
+	}
+}
+
+func TestCopyNothingWhenEmpty(t *testing.T) {
+	app := newTestApp(t)
+	app.view = viewInput
+	app.inputMode = inputPath
+	app.input.SetValue("")
+	called := false
+	t.Cleanup(swapClipboard(nil, func(s string) error { called = true; return nil }))
+	app.Update(keyPress("ctrl+y"))
+	if called {
+		t.Fatal("clipboardWrite must not be called for an empty input")
+	}
+	if !hasToast(app, "Nothing to copy") {
+		t.Fatalf("expected a Nothing to copy toast, got %v", toastTexts(app))
+	}
+}
+
+func TestQuitStillWorksInList(t *testing.T) {
+	app := newTestApp(t, "Questie")
+	app.Update(keyPress("ctrl+c"))
+	if !app.quitting {
+		t.Fatal("ctrl+c must quit from the list view")
+	}
+}
+
+func TestPasteNotFocusedDoesNothing(t *testing.T) {
+	app := newTestApp(t, "Questie")
+	t.Cleanup(swapClipboard(func() (string, error) { return "text", nil }, nil))
+	app.Update(keyPress("ctrl+v"))
+	if app.quitting {
+		t.Fatal("ctrl+v must not quit the app")
+	}
+	if len(app.toasts) != 0 {
+		t.Fatalf("unexpected toasts when no input is focused: %v", toastTexts(app))
 	}
 }

@@ -166,46 +166,49 @@ func (a *App) resetSavedVar(addon string) {
 }
 
 func (a *App) renderSavedVars() string {
-	width := a.width - 6
+	width := a.contentWidth()
 	if width < 60 {
 		width = 60
 	}
+	st := a.styles
 	var b strings.Builder
-	b.WriteString(a.styles.Section.Render("SavedVariables"))
-	b.WriteString("\n")
+	b.WriteString(a.renderViewHeader("SavedVariables", a.svAccount, width))
 	if a.svAccount != "" {
-		b.WriteString(a.styles.Detail.Render("Account: ") +
-			a.styles.Path.Render(a.svAccount) +
-			a.styles.RowMuted.Render("  (enter cycles accounts)"))
+		b.WriteString(st.Detail.Render("Account: ") +
+			st.Path.Render(a.svAccount) +
+			st.RowMuted.Render("  (enter cycles accounts)"))
+		b.WriteString("\n")
 	}
-	b.WriteString("\n\n")
-	if len(a.svAccounts) == 0 {
-		b.WriteString(a.styles.Hint.Render("No accounts found under " + filepathDisplay(a.wtfRoot()) + "/Account"))
-		b.WriteString("\n")
-	} else if len(a.svFiles) == 0 {
-		b.WriteString(a.styles.Hint.Render("No SavedVariables yet for account " + a.svAccount))
-		b.WriteString("\n")
-	} else {
+	switch {
+	case len(a.svAccounts) == 0:
+		b.WriteString(a.renderEmptyState(
+			"No accounts found.",
+			filepathDisplay(a.wtfRoot())+"/Account — esc back"))
+	case len(a.svFiles) == 0:
+		b.WriteString(a.renderEmptyState(
+			"No SavedVariables yet for account "+a.svAccount,
+			"esc back"))
+	default:
 		rows := a.visibleRows()
 		end := a.svOffset + rows
 		if end > len(a.svFiles) {
 			end = len(a.svFiles)
 		}
 		for i := a.svOffset; i < end; i++ {
-			mark := " "
-			if i == a.svCursor {
-				mark = "▸"
-			}
-			row := fmt.Sprintf("%s %s.lua", mark, a.svFiles[i])
-			if i == a.svCursor {
-				b.WriteString(a.styles.RowSelected.Render(pad(row, width)))
-			} else {
-				b.WriteString(a.styles.Row.Render(pad(row, width)))
-			}
-			b.WriteString("\n")
+			selected := i == a.svCursor
+			marker := a.pickerMarker(selected)
+			// Long SavedVariables filenames are truncated so the row
+			// stays inside the panel; renderRowLine pads to full width.
+			row := fmt.Sprintf("%s%s.lua", marker, truncate(a.svFiles[i], maxInt(8, width-8)))
+			b.WriteString(a.renderRowLine(row, selected, width))
 		}
 	}
-	b.WriteString("\n" + a.styles.Hint.Render(
-		"↑/↓ navigate · enter refresh/account · b backup · r reset · esc back"))
-	return a.styles.ListBox.Width(width).Render(b.String())
+	b.WriteString(a.renderFooterHints([]string{
+		a.hintChip("↑/k", "navigate"),
+		a.hintChip("enter", "refresh/account"),
+		a.hintChip("b", "backup"),
+		a.hintChip("r", "reset"),
+		a.hintChip("esc", "back"),
+	}))
+	return st.ListBox.Width(a.width).Render(b.String())
 }

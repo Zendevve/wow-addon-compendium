@@ -211,6 +211,7 @@ func (a *App) switchProfile(id string) {
 	a.pushToast(fmt.Sprintf("Switched collection: %d folder(s) renamed", len(applied)))
 	a.busy = true
 	a.busyText = "Rescanning…"
+	a.scanOrigin = scanOriginRescan
 	a.cmd = a.scanCmd(a.install.Root, a.install.Flavor)
 }
 
@@ -237,17 +238,17 @@ func (a *App) deleteProfile(id string) {
 }
 
 func (a *App) renderProfiles() string {
-	width := a.width - 6
+	width := a.contentWidth()
 	if width < 60 {
 		width = 60
 	}
+	st := a.styles
 	var b strings.Builder
-	b.WriteString(a.styles.Section.Render("Addon collections"))
-	b.WriteString("\n\n")
+	b.WriteString(a.renderViewHeader("Addon collections", fmt.Sprintf("%d collection%s", len(a.profiles), plural(len(a.profiles))), width))
 	if len(a.profiles) == 0 {
-		b.WriteString(a.styles.Hint.Render(
-			"No collections yet — press n to capture the current addon setup."))
-		b.WriteString("\n")
+		b.WriteString(a.renderEmptyState(
+			"No collections yet.",
+			"n capture the current addon setup · esc back"))
 	} else {
 		rows := a.visibleRows()
 		end := a.profilesOffset + rows
@@ -256,25 +257,31 @@ func (a *App) renderProfiles() string {
 		}
 		for i := a.profilesOffset; i < end; i++ {
 			c := a.profiles[i]
-			mark := " "
-			if i == a.profilesCursor {
-				mark = "▸"
-			}
+			selected := i == a.profilesCursor
 			active := ""
 			if a.cfg.Collection == c.ID {
-				active = "  (active)"
+				active = st.StatusOK.Render("  active")
 			}
-			row := fmt.Sprintf("%s %-30s %3d addon(s)%s", mark,
-				truncate(c.Name, 30), len(c.Addons), active)
-			if i == a.profilesCursor {
-				b.WriteString(a.styles.RowSelected.Render(pad(row, width)))
+			marker := a.pickerMarker(selected)
+			name := truncate(c.Name, 30)
+			count := fmt.Sprintf("%d addon%s", len(c.Addons), plural(len(c.Addons)))
+			if selected {
+				name = st.RowNameSel.Render(pad(name, 30))
 			} else {
-				b.WriteString(a.styles.Row.Render(pad(row, width)))
+				name = st.RowName.Render(pad(name, 30))
 			}
-			b.WriteString("\n")
+			row := fmt.Sprintf("%s%s  %s%s", marker, name, st.RowMuted.Render(pad(count, 14)), active)
+			b.WriteString(a.renderRowLine(row, selected, width))
 		}
 	}
-	b.WriteString("\n" + a.styles.Hint.Render(
-		"↑/↓ navigate · enter switch · n create · d duplicate · r rename · x delete · esc back"))
-	return a.styles.ListBox.Width(width).Render(b.String())
+	b.WriteString(a.renderFooterHints([]string{
+		a.hintChip("↑/k", "navigate"),
+		a.hintChip("enter", "switch"),
+		a.hintChip("n", "create"),
+		a.hintChip("d", "duplicate"),
+		a.hintChip("r", "rename"),
+		a.hintChip("x", "delete"),
+		a.hintChip("esc", "back"),
+	}))
+	return st.ListBox.Width(a.width).Render(b.String())
 }

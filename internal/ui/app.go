@@ -61,6 +61,8 @@ type keyMap struct {
 	No        key.Binding
 	ScrollUp  key.Binding
 	ScrollDn  key.Binding
+	Copy      key.Binding
+	Paste     key.Binding
 }
 
 func defaultKeys() keyMap {
@@ -91,6 +93,8 @@ func defaultKeys() keyMap {
 		No:        key.NewBinding(key.WithKeys("n", "esc")),
 		ScrollUp:  key.NewBinding(key.WithKeys("up", "k", "pgup")),
 		ScrollDn:  key.NewBinding(key.WithKeys("down", "j", "pgdn")),
+		Copy:      key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "copy input")),
+		Paste:     key.NewBinding(key.WithKeys("ctrl+v"), key.WithHelp("ctrl+v", "paste into input")),
 	}
 }
 
@@ -125,6 +129,19 @@ const (
 	inputProfileDuplicate
 	inputProfileRename
 )
+
+// scanOrigin records which flow launched the in-flight scan so a failed
+// scan can route back to its source instead of re-running auto-detection.
+const (
+	scanOriginConfig = "config"
+	scanOriginPicker = "picker"
+	scanOriginManual = "manual"
+	scanOriginRescan = "rescan"
+)
+
+// pathInputPlaceholder is the manual-path prompt placeholder. Both the
+// game folder and the Interface\AddOns folder are accepted.
+const pathInputPlaceholder = "WoW folder or Interface\\AddOns (e.g. C:\\Games\\World of Warcraft)"
 
 // --- messages ---------------------------------------------------------
 
@@ -269,6 +286,9 @@ type App struct {
 	// shared manual input mode (path vs install source)
 	inputMode inputKind
 
+	// scanOrigin records which flow launched the in-flight scan.
+	scanOrigin string
+
 	// inspect state
 	inspectAddon  *models.Addon
 	inspectSize   int64
@@ -319,7 +339,7 @@ func NewApp(cfg *config.Config, store *config.Store, log *logger.Logger) *App {
 	sp.Spinner = spinner.Dot
 
 	input := textinput.New()
-	input.Placeholder = "C:\\Games\\World of Warcraft or /opt/wow"
+	input.Placeholder = pathInputPlaceholder
 	input.CharLimit = 500
 
 	filter := textinput.New()
@@ -378,6 +398,7 @@ func (a *App) Init() tea.Cmd {
 		a.profile = models.DefaultProfile()
 	}
 	if a.cfg.WoWPath != "" {
+		a.scanOrigin = scanOriginConfig
 		return tea.Batch(a.scanCmd(a.cfg.WoWPath, a.cfg.Flavor), a.spinner.Tick)
 	}
 	return tea.Batch(a.detectCmd(), a.spinner.Tick)
@@ -689,6 +710,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.err != nil {
 			a.pushToast("Scan failed: " + m.err.Error())
 			a.log.Errorf("Scan failed: %v", m.err)
+			if a.scanOrigin == scanOriginManual || a.scanOrigin == scanOriginConfig {
+				// A hand-entered or saved path failed: go back to the
+				// input with the value prefilled. Never auto-detect.
+				a.view = viewInput
+				a.inputMode = inputPath
+				a.input.SetValue(a.cfg.WoWPath)
+				a.input.CursorEnd()
+				a.input.Focus()
+				return a, nil
+			}
 			a.view = viewPicker
 			a.picker = nil
 			return a, a.detectCmd()
@@ -741,6 +772,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.pushToast(fmt.Sprintf("Fix run: %d applied, %d skipped, %d failed", ok, skipped, failed))
 		if a.install != nil {
+			a.scanOrigin = scanOriginRescan
 			return a, a.scanCmd(a.install.Root, a.install.Flavor)
 		}
 		return a, nil
@@ -800,6 +832,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.pushToast("Installed " + strings.Join(m.names, ", "))
 		a.log.Infof("Installed %s", strings.Join(m.names, ", "))
 		if a.install != nil {
+			a.scanOrigin = scanOriginRescan
 			return a, a.scanCmd(a.install.Root, a.install.Flavor)
 		}
 		return a, nil
@@ -870,6 +903,18 @@ func (a *App) inputFocused() bool {
 // view except the manual path input and the open filter (where q is a
 // normal character) and the help overlay (where q closes it).
 func (a *App) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Clipboard keys are handled before any per-view dispatch so they
+	// cover the path/source input, the list filter and the focused
+	// catalog search uniformly, and so bubbles' own ctrl+v path (whose
+	// paste result the app would drop) never fires.
+	if a.inputFocused() {
+		if key.Matches(msg, a.keys.Paste) {
+			return a.clipboardPaste()
+		}
+		if key.Matches(msg, a.keys.Copy) {
+			return a.clipboardCopy()
+		}
+	}
 	if a.view == viewHelp {
 		return a.updateHelpKey(msg)
 	}
@@ -1016,6 +1061,7 @@ func (a *App) updateListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if a.install != nil {
 			a.busy = true
 			a.busyText = "Scanning…"
+			a.scanOrigin = scanOriginRescan
 			return a, a.scanCmd(a.install.Root, a.install.Flavor)
 		}
 		a.busy = true
@@ -1093,7 +1139,7 @@ func (a *App) updateListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.view = viewInput
 		a.inputMode = inputPath
 		a.input.Reset()
-		a.input.Placeholder = "Path to WoW installation (e.g. C:\\Games\\World of Warcraft)"
+		a.input.Placeholder = pathInputPlaceholder
 		a.input.Focus()
 		return a, textinput.Blink
 
@@ -1354,6 +1400,7 @@ func (a *App) updatePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			a.busy = true
 			a.busyText = "Scanning…"
+			a.scanOrigin = scanOriginPicker
 			return a, a.scanCmd(inst.Root, inst.Flavor)
 		}
 	case key.Matches(msg, a.keys.Escape):
@@ -1367,7 +1414,7 @@ func (a *App) updatePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.view = viewInput
 		a.inputMode = inputPath
 		a.input.Reset()
-		a.input.Placeholder = "Path to WoW installation (e.g. C:\\Games\\World of Warcraft)"
+		a.input.Placeholder = pathInputPlaceholder
 		a.input.Focus()
 		return a, textinput.Blink
 	case key.Matches(msg, a.keys.Quit):
@@ -1399,6 +1446,7 @@ func (a *App) updateProfileKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if a.install != nil {
 			a.busy = true
 			a.busyText = "Re-validating…"
+			a.scanOrigin = scanOriginRescan
 			return a, a.scanCmd(a.install.Root, a.install.Flavor)
 		}
 	case key.Matches(msg, a.keys.Escape):
@@ -1454,6 +1502,7 @@ func (a *App) updateInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.view = viewList
 		a.busy = true
 		a.busyText = "Scanning…"
+		a.scanOrigin = scanOriginManual
 		return a, a.scanCmd(val, "")
 	default:
 		var cmd tea.Cmd
@@ -1521,111 +1570,87 @@ func (a *App) renderFrame(body string) string {
 	}
 	a.toasts = live
 	for _, t := range live {
-		b.WriteString("\n" + a.styles.Toast.Render(t.at.Format("15:04:05")+"  "+t.text))
+		style, glyph := a.toastStyleFor(t.text)
+		b.WriteString("\n" + style.Render(a.styles.ToastTime.Render(t.at.Format("15:04:05"))+"  "+glyph+"  "+t.text))
 	}
 	return a.styles.App.Render(b.String())
 }
 
-// renderHints shows a per-view key hint bar at the bottom of the frame.
-func (a *App) renderHints() string {
-	var bindings []key.Binding
-	switch a.view {
-	case viewList:
-		bindings = []key.Binding{
-			a.keys.Up, a.keys.Down, a.keys.Enter,
-			a.keys.Fix, a.keys.Filter,
-			a.keys.Profiles, a.keys.SavedVars,
-			a.keys.Catalog, a.keys.Updates, a.keys.Help, a.keys.Quit,
-		}
-	case viewInspect:
-		bindings = []key.Binding{a.keys.Up, a.keys.Down, a.keys.Fix, a.keys.Delete, a.keys.Escape}
-	case viewLogs:
-		bindings = []key.Binding{a.keys.ScrollUp, a.keys.ScrollDn, a.keys.Export, a.keys.Escape}
-	case viewPicker:
-		bindings = []key.Binding{a.keys.Up, a.keys.Down, a.keys.Enter, a.keys.Install, a.keys.Escape}
-	case viewProfile:
-		bindings = []key.Binding{a.keys.Up, a.keys.Down, a.keys.Enter, a.keys.Escape}
-	case viewCatalog:
-		bindings = []key.Binding{
-			a.keys.Up, a.keys.Down,
-			key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
-			key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "sort")),
-			key.NewBinding(key.WithKeys("W"), key.WithHelp("W", "filter")),
-			a.keys.Enter,
-			key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "details")),
-			a.keys.Escape,
-		}
-	case viewCatalogAction:
-		bindings = []key.Binding{a.keys.Up, a.keys.Down, a.keys.Enter, a.keys.Escape}
-	case viewCatalogDetail:
-		bindings = []key.Binding{
-			a.keys.Up, a.keys.Down,
-			key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "homepage")),
-			key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "releases")),
-			key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "install")),
-			a.keys.Escape,
-		}
-	case viewUpdates:
-		bindings = []key.Binding{a.keys.Up, a.keys.Down, a.keys.Updates, key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "update all")), a.keys.Enter, a.keys.Escape}
-	case viewUpdatesDetail:
-		bindings = []key.Binding{a.keys.Updates, a.keys.Escape}
-	case viewProfiles:
-		bindings = []key.Binding{
-			a.keys.Up, a.keys.Down, a.keys.Enter,
-			key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "create")),
-			key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "duplicate")),
-			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rename")),
-			key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "delete")),
-			a.keys.Escape,
-		}
-	case viewSavedVars:
-		bindings = []key.Binding{
-			a.keys.Up, a.keys.Down, a.keys.Enter,
-			a.keys.Backup,
-			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reset")),
-			a.keys.Escape,
-		}
-	default:
-		return ""
-	}
-	var parts []string
-	for _, b := range bindings {
-		h := b.Help()
-		parts = append(parts, a.styles.KeyKey.Render(h.Key)+" "+a.styles.KeyHint.Render(h.Desc))
-	}
-	line := strings.Join(parts, "  ·  ")
-	if w := lipgloss.Width(line); w < a.width {
-		line += strings.Repeat(" ", a.width-w)
-	}
-	return "\n" + a.styles.Footer.Render(line)
-}
+// renderHints is now a no-op. Each view renders its own footer hints
+// via renderFooterHints so the per-view key bar always sits right
+// under the view it describes.
+func (a *App) renderHints() string { return "" }
 
-// renderHeader shows the installation and detected version.
+// renderHeader shows the installation and detected version. The header
+// is a single line of structured segments: app title · install path ·
+// profile · flavor · (optional) busy spinner. The install path is
+// middle-truncated when the available width is tight.
 func (a *App) renderHeader() string {
-	title := a.styles.Title.Render("⚔ wowfix " + Version)
-	var sub string
-	if a.install != nil {
-		det := "unknown version"
+	st := a.styles
+	sep := st.Subtitle.Render("  ·  ")
+	sepW := lipgloss.Width(sep)
+
+	title := st.Title.Render("⚔ wowfix") + st.Subtitle.Render(" "+Version)
+
+	pathText := ""
+	metaText := ""
+	flavorText := ""
+	switch {
+	case a.install != nil:
+		pathText = a.install.AddonsPath
+		ver := a.install.Version
+		if ver == "" {
+			ver = "unknown version"
+		}
+		profile := "no profile"
 		if a.profile != nil {
-			det = fmt.Sprintf("%s (expected interface %d)", a.profile.Name, a.profile.Interface)
+			profile = a.profile.Name
 		}
-		if a.install.Version != "" {
-			det = a.install.Version + " · " + det
-		}
-		flavor := a.install.Flavor
-		if flavor == "" {
-			flavor = "root"
-		}
-		sub = fmt.Sprintf(" %s  ·  %s  ·  flavor %s", a.install.AddonsPath, det, flavor)
-	} else if a.cfg.WoWPath != "" {
-		sub = " " + a.cfg.WoWPath
-	} else {
-		sub = " no installation selected"
+		metaText = ver + "  " + profile
+		flavorText = flavorRootLabel(a.install.Flavor)
+	case a.cfg.WoWPath != "":
+		pathText = a.cfg.WoWPath
+	default:
+		metaText = "no installation selected"
 	}
+
+	segments := []string{title}
+	if pathText != "" {
+		segments = append(segments, st.Path.Render(pathText))
+	}
+	if metaText != "" {
+		segments = append(segments, st.Subtitle.Render(metaText))
+	}
+	if flavorText != "" {
+		segments = append(segments, st.Subtitle.Render(flavorText))
+	}
+	busy := ""
 	if a.busy {
-		sub += "  " + a.spinner.View() + " " + a.busyText
+		busy = sep + st.Subtitle.Render(a.spinner.View()+" "+a.busyText)
 	}
-	return title + a.styles.Subtitle.Render(sub)
+
+	// The path is the elastic segment: shrink it so the header stays on
+	// one line on narrow terminals. The loop below sums every non-path
+	// segment (including the title) so nothing is double-counted.
+	pathIdx := -1
+	if pathText != "" {
+		pathIdx = 1
+	}
+	fixed := sepW*(len(segments)-1) + lipgloss.Width(busy)
+	for i, s := range segments {
+		if i == pathIdx {
+			continue
+		}
+		fixed += lipgloss.Width(s)
+	}
+	budget := a.width - fixed
+	if budget < 16 {
+		budget = 16
+	}
+	if pathIdx >= 0 && lipgloss.Width(segments[pathIdx]) > budget {
+		segments[pathIdx] = st.Path.Render(filepathMiddle(pathText, budget))
+	}
+	return strings.Join(segments, sep) + busy
 }
 
 // maxInt/minInt avoid importing math for ints.
