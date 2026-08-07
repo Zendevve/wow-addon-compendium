@@ -38,7 +38,7 @@ export function mountInstall(
           <h2 class="dropzone-title">${busy ? `Installing ${escapeHtml(basename(pendingFile))}…` : "Drop addon ZIP here"}</h2>
           <p class="dropzone-sub">${busy ? "Extracting, flattening and validating…" : "or"}</p>
           <div class="dropzone-browse">
-            <button class="btn btn-outline" data-browse ${busy ? "disabled" : ""}>${icon("folder", 16)}<span>Browse…</span></button>
+            <button class="btn btn-primary" data-browse ${busy ? "disabled" : ""}>${icon("folder", 16)}<span>Browse…</span></button>
           </div>
           <input type="file" class="file-input" accept=".zip,application/zip,application/x-zip-compressed" hidden />
         </div>

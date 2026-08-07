@@ -1,0 +1,566 @@
+/* framer restyle — list views: updates + managed section, installs, sync result.
+   Rows sit transparent on canvas with hairline dividers; only status rows and
+   install bands carry semantic color. No gradients on these data views. */
+
+/* ---------- updates toolbar ---------- */
+
+.updates-toolbar,
+.installs-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--canvas);
+}
+.updates-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+.installs-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+.updates-summary {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: var(--caption);
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.installs-summary {
+  font-size: var(--caption);
+  white-space: nowrap;
+}
+
+/* ---------- update rows ---------- */
+
+.update-rows {
+  padding: 0 20px 24px;
+  display: flex;
+  flex-direction: column;
+}
+.update-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 18px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--hairline-soft);
+  border-left: 2px solid transparent; /* reserved so status rules never shift layout */
+  background: transparent;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
+}
+.update-row:first-child {
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+}
+.update-row:last-child {
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+  border-bottom: none;
+}
+.update-row:only-child {
+  border-radius: var(--r-lg);
+}
+.update-row:hover {
+  background: var(--surface-1);
+}
+.update-row.has-mismatch {
+  border-left-color: var(--warn);
+}
+.update-row.has-error {
+  border-left-color: var(--error);
+}
+
+.update-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  align-items: flex-start;
+}
+.update-name-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  max-width: 100%;
+}
+.update-name {
+  font-size: var(--body-sm);
+  font-weight: var(--body-sm-w);
+  line-height: var(--body-sm-lh);
+  letter-spacing: var(--body-sm-ls);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.update-folder {
+  font-size: var(--micro);
+  color: var(--ink-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mismatch-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 2px 9px;
+  border-radius: var(--r-pill);
+  background: var(--warn-dim);
+  color: var(--warn);
+  font-size: var(--micro);
+  font-weight: var(--caption-w);
+  line-height: var(--micro-lh);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mismatch-badge svg {
+  flex: none;
+}
+
+.row-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+  color: var(--error);
+}
+.row-error svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.update-versions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--body-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.update-ver-cur {
+  color: var(--ink-muted);
+}
+.update-arrow {
+  display: inline-flex;
+  color: var(--ink-faint);
+}
+.update-ver-latest {
+  color: var(--ink);
+  font-weight: 500;
+}
+.update-provider {
+  display: flex;
+  justify-content: flex-end;
+  font-size: var(--caption);
+  color: var(--ink-muted);
+}
+.update-action {
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ---------- managed (tracked addons) ---------- */
+
+.managed {
+  padding: 6px 20px 24px;
+}
+.managed-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin: 8px 0 6px;
+}
+.managed-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--sub);
+  font-weight: 500;
+  line-height: var(--sub-lh);
+  letter-spacing: var(--sub-ls);
+  color: var(--ink);
+}
+.managed-summary {
+  font-size: var(--caption);
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.managed-chips {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-bottom: var(--sp-2);
+}
+
+.managed-rows {
+  display: flex;
+  flex-direction: column;
+}
+.managed-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 18px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--hairline-soft);
+  border-left: 2px solid transparent; /* reserved; rows carry no status rules today */
+  background: transparent;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
+}
+.managed-row:first-child {
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+}
+.managed-row:last-child {
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+  border-bottom: none;
+}
+.managed-row:only-child {
+  border-radius: var(--r-lg);
+}
+.managed-row:hover {
+  background: var(--surface-1);
+}
+
+.managed-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  align-items: flex-start;
+}
+.managed-name-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  max-width: 100%;
+}
+.managed-name {
+  font-size: var(--body-sm);
+  font-weight: var(--body-sm-w);
+  line-height: var(--body-sm-lh);
+  letter-spacing: var(--body-sm-ls);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.managed-folder {
+  font-size: var(--micro);
+  color: var(--ink-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.managed-version {
+  font-size: var(--body-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.managed-provider {
+  display: flex;
+  justify-content: flex-end;
+  font-size: var(--caption);
+  color: var(--ink-muted);
+}
+.managed-actions {
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-1);
+}
+
+.managed-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-7) var(--sp-6);
+  text-align: center;
+}
+.managed-empty-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--ink-faint);
+  margin-bottom: var(--sp-1);
+}
+.managed-empty-icon svg {
+  width: 22px;
+  height: 22px;
+}
+.managed-empty > span:last-child {
+  max-width: 380px;
+  font-family: var(--font-display);
+  font-size: var(--sub);
+  font-weight: 500;
+  line-height: var(--sub-lh);
+  letter-spacing: var(--sub-ls);
+  color: var(--ink);
+}
+
+.managed-error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: 10px 14px;
+  border: 1px solid rgba(248, 81, 73, 0.35);
+  border-radius: var(--r-md);
+  background: var(--error-dim);
+  color: var(--error);
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+}
+.managed-error svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+/* ---------- installs ---------- */
+
+.install-cards {
+  padding: 0 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.install-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border: 1px solid var(--hairline);
+  border-left-width: 2px;
+  border-radius: var(--r-xl);
+  background: var(--surface-1);
+}
+.install-card.band-healthy {
+  border-left-color: var(--ok);
+}
+.install-card.band-attention {
+  border-left-color: var(--warn);
+}
+.install-card.band-repair {
+  border-left-color: var(--error);
+}
+.install-card.missing {
+  opacity: 0.6;
+}
+
+.install-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.install-path {
+  font-size: var(--body-sm);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 100%;
+}
+.install-version {
+  font-size: var(--micro);
+  color: var(--ink-faint);
+}
+
+.install-card-body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-5);
+}
+.install-health {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  white-space: nowrap;
+}
+.install-score {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: var(--title-ls);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.band-healthy .install-score {
+  color: var(--ok);
+}
+.band-attention .install-score {
+  color: var(--warn);
+}
+.band-repair .install-score {
+  color: var(--error);
+}
+.install-denom {
+  font-size: var(--caption);
+  color: var(--ink-faint);
+}
+.install-band-label {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  white-space: nowrap;
+}
+.band-healthy .install-band-label {
+  color: var(--ok);
+  background: var(--ok-dim);
+}
+.band-attention .install-band-label {
+  color: var(--warn);
+  background: var(--warn-dim);
+}
+.band-repair .install-band-label {
+  color: var(--error);
+  background: var(--error-dim);
+}
+
+.install-stats {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: var(--caption);
+  color: var(--ink-muted);
+  white-space: nowrap;
+  min-width: 0;
+}
+.install-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  justify-content: flex-end;
+  flex: none;
+}
+.install-missing {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--caption);
+  color: var(--ink-muted);
+}
+.install-missing-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--warn);
+}
+
+/* Shared summary primitives — ported from style.css; no other module claimed
+   these, but the updates toolbar counts and the installs stats render them,
+   so they live with the list views. (.result-summary* base lives in
+   catalog.css; only the sync-ok/sync-warn icon variants are owned here.) */
+
+.count-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.count-num {
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- cross-install update result panel ---------- */
+
+.sync-result {
+  margin: 0 20px 12px;
+  padding: var(--sp-4);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  background: var(--surface-1);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.result-summary-icon.sync-ok {
+  color: var(--ok);
+}
+.result-summary-icon.sync-warn {
+  color: var(--warn);
+}
+
+.sync-rows {
+  display: flex;
+  flex-direction: column;
+}
+.sync-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--hairline-soft);
+  font-size: var(--caption);
+  min-width: 0;
+}
+.sync-row:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.sync-root {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--caption);
+  color: var(--ink-muted);
+}
+.sync-nums {
+  display: flex;
+  gap: 10px;
+  white-space: nowrap;
+  flex: none;
+  font-size: var(--caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+.sync-errors {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  color: var(--error);
+  font-size: var(--caption);
+  flex: none;
+}
+.sync-errors li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.sync-errors svg {
+  flex: none;
+  margin-top: 1px;
+}

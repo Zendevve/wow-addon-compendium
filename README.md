@@ -10,7 +10,34 @@ two front-ends.
 
 ---
 
-## Screenshot
+## Screenshots
+
+The desktop GUI in mock mode (1440×900), followed by a text preview of the
+scan list as rendered by the retired terminal UI:
+
+**Setup** — install picker with gradient spotlight cards:
+![Setup screen](screenshots/21-setup.png)
+
+**Scan** — per-addon issues with fix actions:
+![Scan screen](screenshots/22-scan.png)
+
+**Updates** — tracked addons with pin/ignore/rollback controls:
+![Updates screen](screenshots/24-updates.png)
+
+**Catalog** — provider search and the curated band with gradient spotlight cards:
+![Catalog screen](screenshots/25-catalog.png)
+
+**Design language** — the desktop GUI is dark-only, drawn on a near-black
+canvas (`#0b0b0a`) with warm charcoal surfaces. Primary actions are white
+pills with black text; secondary controls are charcoal pills; accent blue is
+reserved for links, focus and selection. Display type is Mona Sans Variable
+with tight negative letter-spacing, body copy is Inter Variable with OpenType
+character variants, and gradient spotlight cards are used sparingly (setup
+screen, catalog's curated band).
+
+**Regenerating screenshots** — run `cd frontend && npm install && npm run
+dev`, open `http://localhost:5173/?mock=1&view=<view>` (`?mock=1&state=setup`
+for first-run) and capture at ~1440×900.
 
 A text preview of the scan list, as rendered by the retired terminal UI:
 
@@ -93,7 +120,7 @@ A text preview of the scan list, as rendered by the retired terminal UI:
   the game version is read from the client executable's PE version resource.
 - **Logging** — every action is logged in a ring buffer and exportable to text.
 - **Config** — saved in the platform user config dir; remembers the WoW path,
-  flavor, profile, theme, and last scan.
+  flavor, profile, theme (dark only), and last scan.
 
 ## Install / Build
 
@@ -204,7 +231,8 @@ Stored at `os.UserConfigDir()/wowfix/config.json`:
 - `wow_path` — WoW installation root
 - `flavor` — client subfolder (`_retail_`, `_classic_`, `_classic_era_`, `_classic_tbc_`, or root)
 - `profile` — one of `vanilla, turtle, tbc, wrath, cata, classic, hardcore, sod, retail`
-- `theme` — `dark` | `light`
+- `theme` — `dark` only (the UI is dark-only; the CLI accepts and stores
+  `light` but nothing consumes it)
 - `auto_backup` — snapshot before every mutation (default `true`)
 - `confirmations` — confirm destructive actions (default `true`)
 - `backups_dir` — override the `Backups/` location (default: next to the game)
@@ -217,7 +245,7 @@ Stored at `os.UserConfigDir()/wowfix/config.json`:
 ```sh
 wowfix config set wow_path "D:\Games\World of Warcraft"
 wowfix config set profile wrath
-wowfix config set theme light
+wowfix config set theme dark
 wowfix config set curseforge_api_key "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 WOWFIX_CURSEFORGE_API_KEY=... wowfix search weakauras
 ```

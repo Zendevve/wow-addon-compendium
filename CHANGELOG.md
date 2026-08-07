@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Frontend restyle — Framer design language** — the GUI now uses a
+  near-black canvas (`#0b0b0a`) with warm charcoal surfaces, a white-pill
+  CTA system and accent blue reserved for links, focus rings and
+  selection states; Inter Variable + Mona Sans Variable are bundled via
+  `@fontsource`. `frontend/src/style.css` is a module entry importing
+  tokens/base/components/shell/setup/scan/lists/catalog, and gradient
+  spotlight cards anchor the setup brand panel and the catalog's curated
+  band.
+
 ## [2.1.0] - 2026-08-07
 
 ### Added

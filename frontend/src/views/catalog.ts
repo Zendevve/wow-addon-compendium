@@ -267,9 +267,9 @@ export function mountCatalog(
       curated && curated.addons.length > 0
         ? `
         <section class="curated" aria-label="Recommended addons">
-          <div class="curated-head">
-            <h2 class="curated-title">${icon("shield", 15)}<span>Recommended for ${escapeHtml(curated.label || "your server")}</span></h2>
-            <p class="curated-context">Curated addon sets for private servers — installed from verified sources.</p>
+          <div class="curated-head spotlight">
+            <h2 class="curated-title spotlight-title">${icon("shield", 18)}<span>Recommended for ${escapeHtml(curated.label || "your server")}</span></h2>
+            <p class="curated-context spotlight-sub">Curated addon sets for private servers — installed from verified sources.</p>
           </div>
           <div class="curated-rows">
             ${curated.addons

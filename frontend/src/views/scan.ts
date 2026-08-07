@@ -153,8 +153,10 @@ export function mountScan(
       <div class="doctor-panel band-${band}">
         <div class="doctor-health">
           <span class="doctor-kicker">Addon Health</span>
-          <span class="doctor-score">${avg}<span class="doctor-denom">/100</span></span>
-          <span class="doctor-band">${bandLabel}</span>
+          <div class="doctor-scoreline">
+            <span class="doctor-score">${avg}<span class="doctor-denom">/100</span></span>
+            <span class="doctor-band">${bandLabel}</span>
+          </div>
         </div>
         <div class="doctor-side">
           <p class="doctor-stats">

@@ -1,0 +1,297 @@
+/* wowfix desktop UI — framer restyle: app shell
+   Header, tab bar, status bar, fatal + empty/loading poster states.
+   Tokens live in tokens.css; buttons/inputs come from components.css. */
+
+/* ---------- app grid ---------- */
+
+.app {
+  display: grid;
+  grid-template-rows: 56px 44px minmax(0, 1fr) 26px;
+  height: 100vh;
+}
+.app.no-tabs {
+  grid-template-rows: 56px 0 minmax(0, 1fr) 26px;
+}
+.app.no-tabs .tabbar {
+  display: none;
+}
+
+/* ---------- header ---------- */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 16px;
+  background: var(--canvas);
+  border-bottom: 1px solid var(--hairline-soft);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.brand-mark {
+  display: inline-flex;
+  color: var(--ink);
+}
+.brand-name {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: -0.4px;
+  color: var(--ink);
+}
+.brand-ver {
+  color: var(--ink-faint);
+  margin-top: 1px;
+}
+
+.header-center {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+}
+.path-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 560px;
+  min-height: 28px;
+  padding: 4px 12px;
+  border-radius: var(--r-pill);
+  background: var(--surface-1);
+  color: var(--ink-muted);
+  font-size: var(--caption);
+  letter-spacing: var(--caption-ls);
+  transition: background-color 0.12s ease;
+}
+.path-chip:hover {
+  background: var(--surface-2);
+}
+.path-chip svg {
+  flex: none;
+  color: var(--ink-muted);
+}
+.path-chip-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---------- tab bar ---------- */
+
+.tabbar {
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  background: var(--canvas);
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.tabs {
+  display: flex;
+  gap: 4px;
+  height: 100%;
+}
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 44px;
+  padding: 0 14px;
+  border: none;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--ink-muted);
+  font: inherit;
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  letter-spacing: var(--caption-ls);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease;
+}
+.tab svg {
+  flex: none;
+}
+.tab:hover {
+  color: var(--ink);
+}
+.tab.active {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 6px;
+  border-radius: var(--r-pill);
+  background: var(--surface-1);
+  color: var(--ink-muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.tab.active .tab-badge {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+/* ---------- main ---------- */
+
+.main {
+  overflow-y: auto;
+  background: var(--canvas);
+}
+.main-inner {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- status bar ---------- */
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 14px;
+  background: var(--canvas);
+  border-top: 1px solid var(--hairline-soft);
+  font-size: var(--caption);
+  letter-spacing: var(--caption-ls);
+  color: var(--ink-muted);
+}
+.statusbar-left,
+.statusbar-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+.statusbar-left {
+  overflow: hidden;
+  white-space: nowrap;
+}
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  color: var(--ink-muted);
+}
+.status-chip .status-dot {
+  box-shadow: none;
+}
+.status-chip.busy .spinner {
+  color: var(--accent);
+}
+.status-chip.mock {
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--surface-1);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+/* ---------- fatal ---------- */
+
+.fatal {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--error);
+  text-align: center;
+  padding: 32px;
+}
+.fatal h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--title);
+  font-weight: 500;
+  line-height: var(--title-lh);
+  letter-spacing: var(--title-ls);
+  color: var(--ink);
+}
+.fatal p {
+  margin: 0;
+  max-width: 480px;
+  color: var(--ink-muted);
+  user-select: text;
+}
+
+/* ---------- empty / loading states ---------- */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: var(--sp-2);
+  padding: var(--sp-7) var(--sp-6);
+  color: var(--ink-muted);
+}
+.empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-faint);
+  margin-bottom: var(--sp-2);
+}
+.empty-icon svg {
+  width: 44px;
+  height: 44px;
+}
+.empty-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--title);
+  font-weight: 500;
+  line-height: var(--title-lh);
+  letter-spacing: var(--title-ls);
+  color: var(--ink);
+}
+.empty-sub {
+  margin: 0;
+  max-width: 420px;
+  font-size: var(--body);
+  line-height: var(--body-lh);
+  letter-spacing: var(--body-ls);
+  color: var(--ink-muted);
+}
+.empty-actions {
+  display: inline-flex;
+  gap: 8px;
+  margin-top: var(--sp-3);
+}
+
+.list-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: var(--sp-7) var(--sp-6);
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+}

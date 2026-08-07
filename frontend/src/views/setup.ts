@@ -55,7 +55,7 @@ export function mountSetup(
     el.innerHTML = `
       <div class="setup">
         <div class="setup-card">
-          <div class="setup-brand">
+          <div class="setup-brand spotlight spotlight-violet">
             <span class="setup-brand-mark">${icon("shield", 34)}</span>
             <h1 class="setup-title">Repair your addons.</h1>
             <p class="setup-sub">Point wowfix at a World of Warcraft install to scan for the

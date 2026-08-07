@@ -1,0 +1,86 @@
+/* ==========================================================================
+   wowfix design tokens — Framer design language (near-black / white / blue).
+   This file is the cross-agent contract. Do not rename tokens; add new ones
+   only for genuinely new concepts, never to reintroduce the old theme.
+
+   OLD-VARIABLE MAPPING (for agents porting existing styles):
+   --bg-0        → --canvas
+   --bg-1        → --surface-1
+   --bg-2        → --surface-2
+   --bg-3        → --surface-2
+   --bg-hover    → --surface-1 (rows) or --surface-2 (buttons/tabs)
+   --border      → --hairline
+   --border-strong → --hairline-strong
+   --text-1      → --ink
+   --text-2      → --ink-muted
+   --text-3      → --ink-faint
+   --accent      → --accent        (repointed to #0099ff)
+   --accent-strong → --accent-strong
+   --accent-dim  → --accent-dim
+   --gold / --gold-dim → REMOVED  (brand is monochrome now)
+   --ok / --warn / --error        keep names, new values
+   --radius-sm   → --r-md
+   --radius      → --r-lg
+   --radius-lg   → --r-xl
+   --font-ui     → --font-body
+   --shadow-1 / --shadow-2        keep names, new values
+   ========================================================================== */
+
+:root {
+  /* ---- surfaces ---- */
+  --canvas: #0b0b0a;              /* near-black with faint warmth — the page ground */
+  --surface-1: #161615;           /* charcoal: cards, secondary pills, inputs, rows hover */
+  --surface-2: #1f1f1e;           /* one step up: selected tabs, featured cards, button hover */
+  --canvas-inverse: #ffffff;      /* pure white — light side of dark-on-white CTAs */
+  --hairline: rgba(255, 255, 255, 0.08);
+  --hairline-strong: rgba(255, 255, 255, 0.14);
+  --hairline-soft: rgba(255, 255, 255, 0.055);
+
+  /* ---- text: binary hierarchy ink / ink-muted ---- */
+  --ink: #f7f7f6;
+  --ink-muted: #999999;
+  --ink-faint: rgba(153, 153, 153, 0.55); /* placeholders + disabled ONLY */
+
+  /* ---- accent: links, focus rings, selection states ONLY ---- */
+  --accent: #0099ff;
+  --accent-strong: #33adff;
+  --accent-dim: rgba(0, 153, 255, 0.12);
+
+  /* ---- semantic status ---- */
+  --ok: #3fb950;      --ok-dim: rgba(63, 185, 80, 0.12);
+  --warn: #d29922;    --warn-dim: rgba(210, 153, 34, 0.12);
+  --error: #f85149;   --error-dim: rgba(248, 81, 73, 0.12);
+
+  /* ---- spotlight gradients: CARDS only, never section backgrounds ---- */
+  --gradient-violet:  linear-gradient(135deg, #8b5cf6 0%, #6d3fd4 48%, #4c2e9e 100%);
+  --gradient-magenta: linear-gradient(135deg, #ff5ecf 0%, #e6339a 48%, #b01f72 100%);
+  --gradient-orange:  linear-gradient(135deg, #ffb066 0%, #ff7a3c 52%, #ea551f 100%);
+  --gradient-coral:   linear-gradient(135deg, #ff8a85 0%, #ff5f6d 52%, #eb3a55 100%);
+
+  /* ---- typography ---- */
+  --font-display: "Mona Sans Variable", "Geist Variable", "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-body: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+
+  --display: 40px; --display-lh: 1.0; --display-ls: -2.0px;     /* poster headers: setup title, empty states */
+  --title: 28px;   --title-lh: 1.1;   --title-ls: -1.4px;       /* section headers */
+  --sub: 20px;     --sub-lh: 1.2;     --sub-ls: -0.6px;         /* panel titles */
+  --headline: 17px; --headline-w: 600; --headline-lh: 1.25; --headline-ls: -0.4px;
+  --body: 15px;    --body-lh: 1.35;   --body-ls: -0.15px;
+  --body-sm: 14px; --body-sm-w: 500;  --body-sm-lh: 1.4; --body-sm-ls: -0.14px;
+  --caption: 13px; --caption-w: 500;  --caption-lh: 1.2; --caption-ls: -0.13px;
+  --micro: 12px;   --micro-lh: 1.2;   --micro-ls: -0.12px;
+  --button: 14px;  --button-w: 500;   --button-lh: 1.0; --button-ls: -0.14px;
+
+  /* ---- radius ---- */
+  --r-xs: 4px; --r-sm: 6px; --r-md: 10px; --r-lg: 15px; --r-xl: 20px; --r-xxl: 30px; --r-pill: 100px; --r-full: 9999px;
+
+  /* ---- spacing (5px base unit) ---- */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 15px; --sp-5: 20px; --sp-6: 30px; --sp-7: 40px; --sp-8: 96px;
+
+  /* ---- elevation ---- */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-2: 0 10px 30px rgba(0, 0, 0, 0.25), inset 0 0.5px 0 rgba(255, 255, 255, 0.10); /* floating cards: light edge + drop */
+  --ring-focus: 0 0 0 1px rgba(0, 153, 255, 0.15), 0 0 0 4px rgba(0, 153, 255, 0.06);
+  --ring-selected: 0 0 0 1px rgba(0, 153, 255, 0.15);
+}

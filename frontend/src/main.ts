@@ -2,6 +2,8 @@
 // orchestration of every backend call; the four views are mounted into
 // the content area and only read state / call actions.
 
+import "@fontsource-variable/inter";
+import "@fontsource-variable/mona-sans";
 import "./style.css";
 import { service, mockActive } from "./api";
 import type {
