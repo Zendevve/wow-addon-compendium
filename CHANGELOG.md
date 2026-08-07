@@ -4,7 +4,25 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.2.0] - 2026-08-07
+
+### Added
+
+- **CLI→GUI parity** — every CLI command now has a working GUI
+  equivalent. New service methods: `AddonInfo`, `Sources`, `Doctor`,
+  `SavedVarsAccounts/List/Backup/Restore/Reset/Migrate`, `BackupNow`,
+  `ListBackups`, `RestoreBackup`, `ExportCollection`, `ImportCollection`,
+  `Config`, `SetConfigKey` (theme, auto-backup, confirmations, backups
+  dir, CurseForge API key, collections dir). Five new views — Doctor,
+  Saved Variables, Backups, Settings, Export/Import; the Updates view
+  gains offline snapshot export/check; the Catalog view gains addon
+  details and provider sources. `docs/GUI_PARITY.md` maps every CLI
+  command to its GUI feature with live-verification evidence.
+- **Sidebar navigation** — the 12-item tab bar is replaced by a grouped
+  left sidebar (Overview / Maintenance / Data / System) with a
+  collapsible icon rail and arrow-key navigation.
+- **View-switch transition** — a short fade-and-rise entry animation
+  that respects `prefers-reduced-motion`.
 
 ### Changed
 
@@ -15,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `@fontsource`. `frontend/src/style.css` is a module entry importing
   tokens/base/components/shell/setup/scan/lists/catalog, and gradient
   spotlight cards anchor the setup brand panel and the catalog's curated
+- **Header declutter** — the brand moved into the sidebar; the header is
+  now a slim context bar with the install path, profile select and Scan.
 
 ### Fixed
 
