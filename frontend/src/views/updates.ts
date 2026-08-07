@@ -4,7 +4,7 @@
 // confirm dialog before applying, but never block the list.
 
 import type { AppState, Actions } from "../app";
-import type { UpdateEntry, CheckUpdatesResult, ApplyBatch } from "../types";
+import type { UpdateEntry, CheckUpdatesResult, ApplyBatch, TrackedAddon } from "../types";
 import { icon, type IconName } from "../icons";
 import { service } from "../api";
 import { toast } from "../components/toast";
@@ -17,6 +17,14 @@ const PROVIDER_LABEL: Record<string, string> = {
   tukui: "Tukui",
 };
 
+type ManagedFilter = "all" | "pinned" | "ignored";
+
+const MANAGED_FILTERS: { value: ManagedFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "pinned", label: "Pinned" },
+  { value: "ignored", label: "Ignored" },
+];
+
 export function mountUpdates(
   el: HTMLElement,
   app: AppState,
@@ -26,6 +34,10 @@ export function mountUpdates(
   let checking = false;
   let applying: string | null = null; // folder being updated, or "all"
   const failures = new Map<string, string>(); // folder -> error text
+  let tracked: TrackedAddon[] | null = null;
+  let trackedErr: string | null = null;
+  let managedFilter: ManagedFilter = "all";
+  let mutating: string | null = null; // folder being pinned/ignored/rolled back
 
   const check = async (): Promise<void> => {
     checking = true;
@@ -37,6 +49,93 @@ export function mountUpdates(
     } finally {
       checking = false;
       render();
+    }
+  };
+
+  const loadTracked = async (): Promise<void> => {
+    if (!app.state.has_install) return;
+    try {
+      tracked = (await service.TrackedAddons()).addons;
+      trackedErr = null;
+    } catch (err) {
+      trackedErr = errText(err, "Could not load tracked addons");
+    }
+    render();
+  };
+
+  const reloadAll = async (): Promise<void> => {
+    await Promise.all([check(), loadTracked()]);
+  };
+
+  const setPinned = async (a: TrackedAddon, pinned: boolean): Promise<void> => {
+    if (mutating) return;
+    mutating = a.folder;
+    render();
+    try {
+      await service.SetAddonPinned(a.folder, pinned);
+      toast({
+        type: "ok",
+        title: pinned ? `Pinned ${a.title}` : `Unpinned ${a.title}`,
+        message: pinned
+          ? "Update checks for this addon are paused until unpinned."
+          : "This addon will be checked for updates again.",
+      });
+    } catch (err) {
+      toast({ type: "error", title: "Could not change pin", message: errText(err) });
+    } finally {
+      mutating = null;
+      await reloadAll();
+    }
+  };
+
+  const setIgnored = async (a: TrackedAddon, ignored: boolean): Promise<void> => {
+    if (mutating) return;
+    mutating = a.folder;
+    render();
+    try {
+      await service.SetAddonIgnored(a.folder, ignored);
+      toast({
+        type: "ok",
+        title: ignored ? `Ignored ${a.title}` : `${a.title} tracked again`,
+        message: ignored
+          ? "This addon is excluded from update management."
+          : "This addon is included in update management again.",
+      });
+    } catch (err) {
+      toast({ type: "error", title: "Could not change ignore state", message: errText(err) });
+    } finally {
+      mutating = null;
+      await reloadAll();
+    }
+  };
+
+  const rollback = async (a: TrackedAddon): Promise<void> => {
+    if (mutating) return;
+    const confirmed = await confirmDialog({
+      title: `Roll back ${a.folder}?`,
+      message:
+        "Restores the folder from the newest backup snapshot and pins it (updates stop until unpinned).",
+      confirmLabel: "Roll Back",
+    });
+    if (!confirmed) return;
+    mutating = a.folder;
+    render();
+    try {
+      const res = await service.RollbackAddon(a.folder);
+      toast({
+        type: "ok",
+        title: `Rolled back ${res.folder}`,
+        message: `Restored from ${res.restored_from}, pinned`,
+      });
+    } catch (err) {
+      toast({
+        type: "error",
+        title: `Rollback failed for ${a.folder}`,
+        message: errText(err),
+      });
+    } finally {
+      mutating = null;
+      await reloadAll();
     }
   };
 
@@ -78,7 +177,7 @@ export function mountUpdates(
       toast({ type: "error", title: `Update failed for ${u.title}`, message: errText(err) });
     } finally {
       applying = null;
-      await check();
+      await reloadAll();
     }
   };
 
@@ -106,7 +205,7 @@ export function mountUpdates(
       toast({ type: "error", title: "Update all failed", message: errText(err) });
     } finally {
       applying = null;
-      await check();
+      await reloadAll();
     }
   };
 
@@ -127,6 +226,13 @@ export function mountUpdates(
     const mismatched = updates.filter((u) => u.flavor_mismatch).length;
     const busy = checking || applying !== null;
     const checkedAt = result ? formatCheckedAt(result.checked_at) : "";
+
+    const managedAll = tracked ?? [];
+    const managedVisible = managedAll.filter((t) =>
+      managedFilter === "all" ? true : managedFilter === "pinned" ? t.pinned : t.ignored,
+    );
+    const managedPinned = managedAll.filter((t) => t.pinned).length;
+    const managedIgnored = managedAll.filter((t) => t.ignored).length;
 
     el.innerHTML = `
       <div class="updates">
@@ -177,6 +283,8 @@ export function mountUpdates(
                 )
               : `<div class="update-rows">${updates.map(renderRow).join("")}</div>`
         }
+
+        ${managedSectionHtml(managedAll, managedVisible, managedPinned, managedIgnored)}
       </div>`;
 
     el.querySelector("[data-check]")?.addEventListener("click", () => void check());
@@ -185,6 +293,24 @@ export function mountUpdates(
     el.querySelectorAll<HTMLElement>("[data-apply-one]").forEach((btn) => {
       const u = updates[Number(btn.dataset.applyOne)];
       btn.addEventListener("click", () => void applyOne(u));
+    });
+    el.querySelectorAll<HTMLElement>("[data-managed-filter]").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        managedFilter = (chip.dataset.managedFilter ?? "all") as ManagedFilter;
+        render();
+      });
+    });
+    el.querySelectorAll<HTMLElement>("[data-managed-pin]").forEach((btn) => {
+      const t = managedVisible[Number(btn.dataset.managedPin)];
+      btn.addEventListener("click", () => void setPinned(t, !t.pinned));
+    });
+    el.querySelectorAll<HTMLElement>("[data-managed-ignore]").forEach((btn) => {
+      const t = managedVisible[Number(btn.dataset.managedIgnore)];
+      btn.addEventListener("click", () => void setIgnored(t, !t.ignored));
+    });
+    el.querySelectorAll<HTMLElement>("[data-managed-rollback]").forEach((btn) => {
+      const t = managedVisible[Number(btn.dataset.managedRollback)];
+      btn.addEventListener("click", () => void rollback(t));
     });
   };
 
@@ -221,11 +347,95 @@ export function mountUpdates(
       </div>`;
   };
 
+  const renderManagedRow = (t: TrackedAddon, i: number): string => {
+    const state = t.pinned
+      ? `<span class="tag tag-pinned" title="Pinned — locked at the current version">${icon("lock", 11)}<span>Pinned</span></span>`
+      : t.ignored
+        ? `<span class="tag tag-ignored" title="Ignored — excluded from update management">Ignored</span>`
+        : "";
+    const busy = mutating === t.folder;
+    return `
+      <div class="managed-row">
+        <div class="managed-info">
+          <div class="managed-name-line">
+            <span class="managed-name">${escapeHtml(t.title)}</span>
+            ${state}
+          </div>
+          <span class="managed-folder mono">${escapeHtml(t.folder)}</span>
+        </div>
+        <div class="managed-version mono">${escapeHtml(t.version || "—")}</div>
+        <div class="managed-provider">${providerChip(t.provider)}</div>
+        <div class="managed-actions">
+          <button class="btn btn-outline btn-sm" data-managed-pin="${i}" ${busy ? "disabled" : ""}
+            title="${t.pinned ? "Unlock and resume update checks" : "Lock at the current version"}"
+            aria-label="${t.pinned ? "Unpin" : "Pin"} ${escapeAttr(t.title)}">
+            ${icon("lock", 12)}<span>${t.pinned ? "Unpin" : "Pin"}</span>
+          </button>
+          <button class="btn btn-outline btn-sm" data-managed-ignore="${i}" ${busy ? "disabled" : ""}
+            title="${t.ignored ? "Include in update management again" : "Exclude from update management"}"
+            aria-label="${t.ignored ? "Track" : "Ignore"} ${escapeAttr(t.title)}">
+            ${icon(t.ignored ? "eye" : "eye-off", 12)}<span>${t.ignored ? "Track again" : "Ignore"}</span>
+          </button>
+          <button class="btn btn-sm btn-restore" data-managed-rollback="${i}" ${busy ? "disabled" : ""}
+            title="Restore ${escapeAttr(t.folder)} from the newest backup snapshot">
+            ${icon("download", 12)}<span>Rollback</span>
+          </button>
+        </div>
+      </div>`;
+  };
+
+  const managedSectionHtml = (
+    all: TrackedAddon[],
+    visible: TrackedAddon[],
+    pinnedCount: number,
+    ignoredCount: number,
+  ): string => {
+    const chips = MANAGED_FILTERS.map((f) => {
+      const count =
+        f.value === "all"
+          ? all.length
+          : f.value === "pinned"
+            ? pinnedCount
+            : ignoredCount;
+      return `<button class="chip-btn${managedFilter === f.value ? " active" : ""}" data-managed-filter="${f.value}" aria-pressed="${managedFilter === f.value}">
+        ${f.label}<span class="chip-count">${count}</span>
+      </button>`;
+    }).join("");
+
+    let body: string;
+    if (trackedErr) {
+      body = `<div class="managed-error" role="alert">${icon("alert", 14)}<span>${escapeHtml(trackedErr)}</span></div>`;
+    } else if (tracked === null) {
+      body = `<div class="list-loading"><span class="spinner spinner-lg"></span><span>Loading tracked addons…</span></div>`;
+    } else if (all.length === 0) {
+      body = `<div class="managed-empty">
+        <span class="managed-empty-icon">${icon("list", 18)}</span>
+        <span>No tracked addons yet — install from the catalog to track addons here.</span>
+      </div>`;
+    } else {
+      body = `<div class="managed-rows">${visible.map((t, i) => renderManagedRow(t, i)).join("")}</div>`;
+    }
+
+    return `
+      <section class="managed" aria-label="Tracked addons">
+        <div class="managed-head">
+          <h2 class="managed-title">Managed</h2>
+          <span class="managed-summary">${all.length} tracked · ${pinnedCount} pinned · ${ignoredCount} ignored</span>
+        </div>
+        <div class="managed-chips" role="group" aria-label="Filter managed addons">${chips}</div>
+        ${body}
+      </section>`;
+  };
+
   render();
   void check();
+  void loadTracked();
 
   return {
-    refresh: render,
+    refresh: () => {
+      render();
+      void loadTracked();
+    },
   };
 }
 

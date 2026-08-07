@@ -84,6 +84,10 @@ export interface Addon {
   drifted: boolean;
   /** The provider source (URL or owner/repo) the addon was installed from. */
   tracked_source?: string;
+  /** Locked at the current version — skipped by update checks. */
+  pinned: boolean;
+  /** Excluded from update management entirely. */
+  ignored: boolean;
 }
 
 export interface ScanStats {
@@ -156,6 +160,31 @@ export interface CheckUpdatesResult {
   updates: UpdateEntry[];
   errors: string[];
   checked_at: string;
+}
+
+/** One addon recorded in the catalog registry (the Managed section). */
+export interface TrackedAddon {
+  folder: string;
+  title: string;
+  version: string;
+  provider: Provider;
+  id: string;
+  source: string;
+  pinned: boolean;
+  ignored: boolean;
+  installed_at: string;
+}
+
+export interface TrackedResult {
+  addons: TrackedAddon[];
+}
+
+export interface RollbackResult {
+  folder: string;
+  restored_from: string;
+  version: string;
+  pinned: boolean;
+  message: string;
 }
 
 export interface ApplyEntry {
@@ -273,6 +302,10 @@ export interface Service {
   CheckUpdates(): Promise<CheckUpdatesResult>;
   ApplyUpdate(folder: string, allowReplace: boolean): Promise<ApplyBatch>;
   ApplyAllUpdates(allowReplace: boolean): Promise<ApplyBatch>;
+  TrackedAddons(): Promise<TrackedResult>;
+  SetAddonPinned(folder: string, pinned: boolean): Promise<void>;
+  SetAddonIgnored(folder: string, ignored: boolean): Promise<void>;
+  RollbackAddon(folder: string): Promise<RollbackResult>;
   SearchCatalog(query: string): Promise<SearchCatalogResult>;
   InstallSource(source: string, allowReplace: boolean): Promise<InstallSourceResult>;
   RestoreAddon(folder: string, allowReplace: boolean): Promise<InstallSourceResult>;

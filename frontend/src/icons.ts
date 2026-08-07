@@ -30,7 +30,10 @@ export type IconName =
   | "archive"
   | "download"
   | "stack"
-  | "grid";
+  | "grid"
+  | "lock"
+  | "eye"
+  | "eye-off";
 
 const P: Record<IconName, string> = {
   shield:
@@ -83,6 +86,12 @@ const P: Record<IconName, string> = {
     '<rect x="4" y="3.5" width="16" height="4.5" rx="1"/><rect x="4" y="9.75" width="16" height="4.5" rx="1"/><rect x="4" y="16" width="16" height="4.5" rx="1"/>',
   grid:
     '<rect x="4" y="4" width="7" height="7" rx="1.2"/><rect x="13" y="4" width="7" height="7" rx="1.2"/><rect x="4" y="13" width="7" height="7" rx="1.2"/><rect x="13" y="13" width="7" height="7" rx="1.2"/>',
+  lock:
+    '<rect x="5.5" y="10.5" width="13" height="9.5" rx="1.8"/><path d="M8.5 10.5V7.8a3.5 3.5 0 0 1 7 0v2.7"/>',
+  eye:
+    '<path d="M2.8 12S6.5 6.2 12 6.2s9.2 5.8 9.2 5.8-3.7 5.8-9.2 5.8S2.8 12 2.8 12Z"/><circle cx="12" cy="12" r="2.6"/>',
+  "eye-off":
+    '<path d="M2.8 12S6.5 6.2 12 6.2s9.2 5.8 9.2 5.8"/><path d="M12 17.8c-5.5 0-9.2-5.8-9.2-5.8"/><path d="m4.5 4.5 15 15"/>',
 };
 
 const ATTRS =

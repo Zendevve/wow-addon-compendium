@@ -10,6 +10,7 @@
 //   index.html?mock=1&state=setup -> first-run state (no install)
 //   index.html?mock=1&view=validate / view=install -> open a specific tab
 //   index.html?mock=1&view=updates / view=catalog -> new-tab screenshots
+//   index.html?mock=1&view=updates&tracked=none -> empty Managed section
 
 import type {
   Service,
@@ -36,6 +37,8 @@ import type {
   InstallsStatusResult,
   InstallStatus,
   SyncResult,
+  TrackedResult,
+  RollbackResult,
 } from "./types";
 
 const DELAY_MS = 350;
@@ -116,6 +119,8 @@ interface MockDB {
   scannedAt: string;
   lastInstall: InstallResult | null;
   tracked: UpdateEntry[];
+  /** Pin/ignore flags per tracked folder, mirroring the registry. */
+  trackedState: Record<string, { pinned: boolean; ignored: boolean }>;
   collections: MockCollection[];
   activeCollectionId: string;
 }
@@ -363,7 +368,7 @@ function compat(
 }
 
 function seedAddons(): Addon[] {
-  const base: Array<Omit<Addon, "tracked" | "drifted">> = [
+  const base: Array<Omit<Addon, "tracked" | "drifted" | "pinned" | "ignored">> = [
     {
       folder_name: "Inventory",
       base_name: "Inventory",
@@ -648,11 +653,31 @@ function seedAddons(): Addon[] {
   // Integrity defaults: untracked by default. Questie is the seeded
   // tracked addon and drifted, so the scan view shows the modified
   // badge + Restore button out of the box (mock screenshot workflow).
-  return base.map((a) =>
-    a.folder_name === "Questie"
-      ? { ...a, tracked: true, drifted: true, tracked_source: "Vendethiel/Questie" }
-      : { ...a, tracked: false, drifted: false },
-  );
+  // Questie is pinned and DeadlyBossMods ignored, mirroring the
+  // Managed-section seed, so the scan rows carry their state badges.
+  return base.map((a) => {
+    if (a.folder_name === "Questie") {
+      return {
+        ...a,
+        tracked: true,
+        drifted: true,
+        tracked_source: "Vendethiel/Questie",
+        pinned: true,
+        ignored: false,
+      };
+    }
+    if (a.folder_name === "DeadlyBossMods") {
+      return {
+        ...a,
+        tracked: true,
+        drifted: false,
+        tracked_source: "https://www.curseforge.com/wow/addons/deadly-boss-mods",
+        pinned: false,
+        ignored: true,
+      };
+    }
+    return { ...a, tracked: false, drifted: false, pinned: false, ignored: false };
+  });
 }
 
 // Health score mirrors the backend rule: 100 minus 30 per error issue,
@@ -678,6 +703,11 @@ function freshDB(): MockDB {
     scannedAt: new Date().toISOString(),
     lastInstall: null,
     tracked: TRACKED_UPDATES.map((u) => ({ ...u })),
+    trackedState: {
+      Questie: { pinned: true, ignored: false },
+      DeadlyBossMods: { pinned: false, ignored: true },
+      WeakAuras: { pinned: false, ignored: false },
+    },
     collections: SEED_COLLECTIONS.map((c) => ({
       id: c.id,
       name: c.name,
@@ -738,6 +768,10 @@ export function createMockService(): Service {
   const db = freshDB();
   const setupOnly = new URLSearchParams(window.location.search).get("state") === "setup";
   if (setupOnly) db.install = null;
+  // ?tracked=none renders the updates view with an empty Managed section
+  // (screenshot / empty-state workflow).
+  const trackedNone =
+    new URLSearchParams(window.location.search).get("tracked") === "none";
 
   return {
     async GetState(): Promise<State> {
@@ -845,6 +879,8 @@ export function createMockService(): Service {
           health: 100,
           tracked: false,
           drifted: false,
+          pinned: false,
+          ignored: false,
           toc: {
             path: `${db.install?.addons_dir ?? "C:\\Games\\World of Warcraft Classic\\Interface\\AddOns"}\\WeakAuras\\WeakAuras.toc`,
             name: "WeakAuras",
@@ -871,9 +907,15 @@ export function createMockService(): Service {
 
     async CheckUpdates(): Promise<CheckUpdatesResult> {
       await delay(600);
-      const updates = db.tracked.filter(
-        (u) => u.current_version !== u.latest_version,
-      );
+      // Pinned entries are locked at their current version and ignored
+      // entries are excluded from update management — neither is ever
+      // reported as updatable (mirrors the Go updater).
+      const updates = db.tracked.filter((u) => {
+        const st = db.trackedState[u.folder] ?? { pinned: false, ignored: false };
+        return (
+          !st.pinned && !st.ignored && u.current_version !== u.latest_version
+        );
+      });
       return {
         updates: updates.map((u) => ({ ...u })),
         errors: [],
@@ -921,6 +963,59 @@ export function createMockService(): Service {
       return { applied, applied_count: applied.length, failed_count: 0 };
     },
 
+    async TrackedAddons(): Promise<TrackedResult> {
+      await delay(400);
+      if (trackedNone) return { addons: [] };
+      return {
+        addons: db.tracked.map((u) => {
+          const st = db.trackedState[u.folder] ?? {
+            pinned: false,
+            ignored: false,
+          };
+          return {
+            folder: u.folder,
+            title: u.title,
+            version: u.current_version,
+            provider: u.provider,
+            id: u.id,
+            source: u.source,
+            pinned: st.pinned,
+            ignored: st.ignored,
+            installed_at: "2026-08-01T09-15-00.000Z",
+          };
+        }),
+      };
+    },
+
+    async SetAddonPinned(folder: string, pinned: boolean): Promise<void> {
+      await delay(250);
+      const st = db.trackedState[folder];
+      if (!st) throw new Error(`addon "${folder}" not tracked in registry`);
+      st.pinned = pinned;
+    },
+
+    async SetAddonIgnored(folder: string, ignored: boolean): Promise<void> {
+      await delay(250);
+      const st = db.trackedState[folder];
+      if (!st) throw new Error(`addon "${folder}" not tracked in registry`);
+      st.ignored = ignored;
+    },
+
+    async RollbackAddon(folder: string): Promise<RollbackResult> {
+      await delay(700);
+      const u = db.tracked.find((x) => x.folder === folder);
+      const st = db.trackedState[folder];
+      if (!u || !st) throw new Error(`addon "${folder}" not tracked in registry`);
+      st.pinned = true; // rollback stops updates until unpinned
+      return {
+        folder: u.folder,
+        restored_from: "2026-08-07T10-00-00.000",
+        version: u.current_version,
+        pinned: true,
+        message: "restored from snapshot 2026-08-07T10-00-00.000 and pinned",
+      };
+    },
+
     async SearchCatalog(query: string): Promise<SearchCatalogResult> {
       await delay(500);
       const q = query.trim().toLowerCase();
@@ -957,6 +1052,8 @@ export function createMockService(): Service {
           health: 100,
           tracked: true,
           drifted: false,
+          pinned: false,
+          ignored: false,
           tracked_source: src,
           toc: {
             path: `${db.install?.addons_dir ?? "C:\\Games\\World of Warcraft Classic\\Interface\\AddOns"}\\${folder}\\${folder}.toc`,

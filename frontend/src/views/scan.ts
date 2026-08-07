@@ -326,6 +326,16 @@ export function mountScan(
         ? `<span class="tag tag-drifted" title="Changed since install — differs from the recorded manifest checksum">${icon("alert", 11)}Modified</span>`
         : `<span class="tag tag-tracked" title="Installed from ${escapeAttr(a.tracked_source ?? "its provider")}">tracked</span>`
       : "";
+    // Management state, mirroring the registry flags: pin/ignore live in
+    // the Updates view, these are read-only indicators.
+    const stateTag = [
+      a.pinned
+        ? `<span class="tag tag-pinned" title="Pinned — locked at the current version">${icon("lock", 11)}pinned</span>`
+        : "",
+      a.ignored
+        ? `<span class="tag tag-ignored" title="Ignored — excluded from update management">ignored</span>`
+        : "",
+    ].join("");
     const fixableIssue = a.issues.find((x) => x.action);
     const destructive = fixableIssue
       ? DESTRUCTIVE_ACTIONS.has(fixableIssue.action)
@@ -362,6 +372,7 @@ export function mountScan(
             <span class="addon-name">${escapeHtml(a.folder_name)}</span>
             ${a.nested ? `<span class="tag tag-nested">${icon("flatten", 12)}nested</span>` : ""}
             ${integrityTag}
+            ${stateTag}
             ${rename}
           </div>
           <div class="addon-issue">${issue ? escapeHtml(issue.message) : `<span class="addon-clean">No issues</span>`}${more}</div>

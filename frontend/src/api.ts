@@ -70,6 +70,11 @@ function normalize(name: keyof Service, p: Promise<unknown>): Promise<unknown> {
         u.errors = u.errors ?? [];
         return u;
       }
+      case "TrackedAddons": {
+        const t = raw as Record<string, unknown>;
+        t.addons = t.addons ?? [];
+        return t;
+      }
       case "ApplyUpdate":
       case "ApplyAllUpdates": {
         const b = raw as Record<string, unknown>;
@@ -141,6 +146,10 @@ export const service: Service = {
   ApplyUpdate: (folder, allowReplace) =>
     call("ApplyUpdate", folder, allowReplace),
   ApplyAllUpdates: (allowReplace) => call("ApplyAllUpdates", allowReplace),
+  TrackedAddons: () => call("TrackedAddons"),
+  SetAddonPinned: (folder, pinned) => call("SetAddonPinned", folder, pinned),
+  SetAddonIgnored: (folder, ignored) => call("SetAddonIgnored", folder, ignored),
+  RollbackAddon: (folder) => call("RollbackAddon", folder),
   SearchCatalog: (query) => call("SearchCatalog", query),
   InstallSource: (source, allowReplace) =>
     call("InstallSource", source, allowReplace),
