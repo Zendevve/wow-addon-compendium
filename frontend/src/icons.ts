@@ -28,7 +28,9 @@ export type IconName =
   | "table"
   | "warning-oct"
   | "archive"
-  | "download";
+  | "download"
+  | "stack"
+  | "grid";
 
 const P: Record<IconName, string> = {
   shield:
@@ -77,6 +79,10 @@ const P: Record<IconName, string> = {
     '<rect x="3.5" y="4" width="17" height="4" rx="1"/><path d="M5 8v11a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19V8"/><path d="M10 12h4"/>',
   download:
     '<path d="M12 3.5v10"/><path d="m7.8 9.3 4.2 4.2 4.2-4.2"/><path d="M4.5 17.5v2A1.5 1.5 0 0 0 6 21h12a1.5 1.5 0 0 0 1.5-1.5v-2"/>',
+  stack:
+    '<rect x="4" y="3.5" width="16" height="4.5" rx="1"/><rect x="4" y="9.75" width="16" height="4.5" rx="1"/><rect x="4" y="16" width="16" height="4.5" rx="1"/>',
+  grid:
+    '<rect x="4" y="4" width="7" height="7" rx="1.2"/><rect x="13" y="4" width="7" height="7" rx="1.2"/><rect x="4" y="13" width="7" height="7" rx="1.2"/><rect x="13" y="13" width="7" height="7" rx="1.2"/>',
 };
 
 const ATTRS =

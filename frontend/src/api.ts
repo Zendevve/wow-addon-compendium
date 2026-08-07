@@ -91,6 +91,33 @@ function normalize(name: keyof Service, p: Promise<unknown>): Promise<unknown> {
         s.errors = s.errors ?? [];
         return s;
       }
+      case "Collections": {
+        const c = raw as Record<string, unknown>;
+        c.collections = c.collections ?? [];
+        return c;
+      }
+      case "SwitchCollection": {
+        const s = raw as Record<string, unknown>;
+        s.applied = s.applied ?? [];
+        return s;
+      }
+      case "CollectionDetail": {
+        const d = raw as Record<string, unknown>;
+        d.addons = d.addons ?? [];
+        return d;
+      }
+      case "InstallsStatus": {
+        const r = raw as Record<string, unknown>;
+        r.installs = r.installs ?? [];
+        return r;
+      }
+      case "SyncUpdatesToAll": {
+        const r = raw as Record<string, unknown>;
+        const installs = (r.installs ?? []) as Record<string, unknown>[];
+        for (const inst of installs) inst.errors = inst.errors ?? [];
+        r.installs = installs;
+        return r;
+      }
       default:
         return raw;
     }
@@ -119,4 +146,13 @@ export const service: Service = {
     call("InstallSource", source, allowReplace),
   RestoreAddon: (folder, allowReplace) =>
     call("RestoreAddon", folder, allowReplace),
+  Collections: () => call("Collections"),
+  CreateCollection: (name) => call("CreateCollection", name),
+  SwitchCollection: (id) => call("SwitchCollection", id),
+  DeleteCollection: (id) => call("DeleteCollection", id),
+  CollectionDetail: (id) => call("CollectionDetail", id),
+  SetCollectionAddon: (id, folder, enabled) =>
+    call("SetCollectionAddon", id, folder, enabled),
+  InstallsStatus: () => call("InstallsStatus"),
+  SyncUpdatesToAll: (allowReplace) => call("SyncUpdatesToAll", allowReplace),
 };

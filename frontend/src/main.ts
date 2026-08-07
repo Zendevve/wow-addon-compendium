@@ -26,6 +26,8 @@ import { mountValidate } from "./views/validate";
 import { mountInstall } from "./views/install";
 import { mountUpdates } from "./views/updates";
 import { mountCatalog } from "./views/catalog";
+import { mountCollections } from "./views/collections";
+import { mountInstalls } from "./views/installs";
 
 const appEl = document.getElementById("app")!;
 appEl.innerHTML = `
@@ -50,6 +52,8 @@ const TABS: { view: View; label: string; glyph: string }[] = [
   { view: "updates", label: "Updates", glyph: "refresh" },
   { view: "catalog", label: "Catalog", glyph: "search" },
   { view: "install", label: "Install", glyph: "package" },
+  { view: "collections", label: "Collections", glyph: "stack" },
+  { view: "installs", label: "Installs", glyph: "grid" },
 ];
 
 let app: AppState;
@@ -63,7 +67,7 @@ function boot(): void {
         service.Profiles(),
       ]);
       const requested = new URLSearchParams(window.location.search).get("view");
-      const allowedViews: View[] = ["scan", "validate", "install", "updates", "catalog"];
+      const allowedViews: View[] = ["scan", "validate", "install", "updates", "catalog", "collections", "installs"];
       const initialView: View = state.has_install
         ? allowedViews.includes(requested as View)
           ? (requested as View)
@@ -539,6 +543,12 @@ function mountView(): void {
       break;
     case "catalog":
       current = mountCatalog(content, app, actions);
+      break;
+    case "collections":
+      current = mountCollections(content, app, actions);
+      break;
+    case "installs":
+      current = mountInstalls(content, app, actions);
       break;
   }
 }

@@ -194,6 +194,70 @@ export interface InstallSourceResult {
   errors: string[];
 }
 
+// ---------- collections (addon loadouts) ----------
+
+export interface CollectionInfo {
+  id: string;
+  name: string;
+  addon_count: number;
+  active: boolean;
+}
+
+export interface CollectionsResult {
+  collections: CollectionInfo[];
+  active_id: string;
+}
+
+export interface CollectionAddonState {
+  folder: string;
+  enabled: boolean;
+}
+
+export interface CollectionDetail {
+  id: string;
+  name: string;
+  addons: CollectionAddonState[];
+}
+
+export interface SwitchCollectionResult {
+  applied: string[];
+  message: string;
+}
+
+// ---------- installs (per-install status + cross-install updates) ----------
+
+export interface InstallStatus {
+  root: string;
+  flavor: string;
+  addons_path: string;
+  exe: string;
+  version: string;
+  profile_id: string;
+  confidence: string;
+  exists: boolean;
+  addons: number;
+  problems: number;
+  errors: number;
+  health: number;
+}
+
+export interface InstallsStatusResult {
+  installs: InstallStatus[];
+}
+
+export interface SyncInstallEntry {
+  root: string;
+  updated: number;
+  failed: number;
+  errors: string[];
+}
+
+export interface SyncResult {
+  installs: SyncInstallEntry[];
+  total_updated: number;
+  total_failed: number;
+}
+
 /** The Service surface exposed by `window.go.service.Service`. */
 export interface Service {
   GetState(): Promise<State>;
@@ -212,9 +276,25 @@ export interface Service {
   SearchCatalog(query: string): Promise<SearchCatalogResult>;
   InstallSource(source: string, allowReplace: boolean): Promise<InstallSourceResult>;
   RestoreAddon(folder: string, allowReplace: boolean): Promise<InstallSourceResult>;
+  Collections(): Promise<CollectionsResult>;
+  CreateCollection(name: string): Promise<CollectionInfo>;
+  SwitchCollection(id: string): Promise<SwitchCollectionResult>;
+  DeleteCollection(id: string): Promise<void>;
+  CollectionDetail(id: string): Promise<CollectionDetail>;
+  SetCollectionAddon(id: string, folder: string, enabled: boolean): Promise<void>;
+  InstallsStatus(): Promise<InstallsStatusResult>;
+  SyncUpdatesToAll(allowReplace: boolean): Promise<SyncResult>;
 }
 
-export type View = "setup" | "scan" | "validate" | "install" | "updates" | "catalog";
+export type View =
+  | "setup"
+  | "scan"
+  | "validate"
+  | "install"
+  | "updates"
+  | "catalog"
+  | "collections"
+  | "installs";
 
 export const DESTRUCTIVE_ACTIONS = new Set(["delete", "merge"]);
 

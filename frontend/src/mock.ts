@@ -29,6 +29,13 @@ import type {
   CatalogEntry,
   CheckUpdatesResult,
   SearchCatalogResult,
+  CollectionsResult,
+  CollectionInfo,
+  CollectionDetail,
+  SwitchCollectionResult,
+  InstallsStatusResult,
+  InstallStatus,
+  SyncResult,
 } from "./types";
 
 const DELAY_MS = 350;
@@ -96,6 +103,12 @@ interface MockInstallState {
   profile_id: string;
 }
 
+interface MockCollection {
+  id: string;
+  name: string;
+  addons: { folder: string; enabled: boolean }[];
+}
+
 interface MockDB {
   install: MockInstallState | null;
   addons: Addon[];
@@ -103,7 +116,85 @@ interface MockDB {
   scannedAt: string;
   lastInstall: InstallResult | null;
   tracked: UpdateEntry[];
+  collections: MockCollection[];
+  activeCollectionId: string;
 }
+
+// Seeded collections: "pve" is the active loadout (4 enabled of 6), "pvp"
+// is inactive. SetCollectionAddon toggles `enabled` on the detail rows.
+const SEED_COLLECTIONS: MockCollection[] = [
+  {
+    id: "pve",
+    name: "pve",
+    addons: [
+      { folder: "Questie", enabled: true },
+      { folder: "DeadlyBossMods", enabled: true },
+      { folder: "AtlasLoot", enabled: true },
+      { folder: "WeakAuras2", enabled: true },
+      { folder: "Inventory", enabled: false },
+      { folder: "TempFolder", enabled: false },
+    ],
+  },
+  {
+    id: "pvp",
+    name: "pvp",
+    addons: [
+      { folder: "ArenaMaster", enabled: true },
+      { folder: "Gladius", enabled: true },
+      { folder: "InterruptBar", enabled: true },
+      { folder: "WeakAuras2", enabled: true },
+      { folder: "VoiceOverlay", enabled: false },
+    ],
+  },
+];
+
+// Per-install status fed to InstallsStatus: one Wrath install in the
+// attention band (72), one retail install with a missing AddOns folder,
+// and a healthy Classic install (95).
+const INSTALLS_STATUS: InstallStatus[] = [
+  {
+    root: "C:\\Games\\ChromieCraft",
+    flavor: "_classic_",
+    addons_path: "C:\\Games\\ChromieCraft\\_classic_\\Interface\\AddOns",
+    exe: "C:\\Games\\ChromieCraft\\_classic_\\Wow.exe",
+    version: "3.3.5a",
+    profile_id: "wrath",
+    confidence: "high",
+    exists: true,
+    addons: 37,
+    problems: 6,
+    errors: 2,
+    health: 72,
+  },
+  {
+    root: "C:\\Games\\World of Warcraft",
+    flavor: "_retail_",
+    addons_path: "C:\\Games\\World of Warcraft\\_retail_\\Interface\\AddOns",
+    exe: "C:\\Games\\World of Warcraft\\_retail_\\Wow.exe",
+    version: "10.2.7.52789",
+    profile_id: "retail",
+    confidence: "high",
+    exists: false,
+    addons: 0,
+    problems: 0,
+    errors: 0,
+    health: 95,
+  },
+  {
+    root: "C:\\Games\\World of Warcraft Classic",
+    flavor: "root",
+    addons_path: "C:\\Games\\World of Warcraft Classic\\Interface\\AddOns",
+    exe: "C:\\Games\\World of Warcraft Classic\\Wow.exe",
+    version: "3.4.3.54468",
+    profile_id: "wrath",
+    confidence: "high",
+    exists: true,
+    addons: 12,
+    problems: 1,
+    errors: 0,
+    health: 95,
+  },
+];
 
 // Addons the updater follows. Mutable: ApplyUpdate / ApplyAllUpdates bump
 // current_version to latest_version (and clear flavor_mismatch), so the next
@@ -587,6 +678,12 @@ function freshDB(): MockDB {
     scannedAt: new Date().toISOString(),
     lastInstall: null,
     tracked: TRACKED_UPDATES.map((u) => ({ ...u })),
+    collections: SEED_COLLECTIONS.map((c) => ({
+      id: c.id,
+      name: c.name,
+      addons: c.addons.map((a) => ({ ...a })),
+    })),
+    activeCollectionId: "pve",
   };
 }
 
@@ -894,6 +991,89 @@ export function createMockService(): Service {
       db.scannedAt = new Date().toISOString();
       return { installed: [folder], replaced: [], skipped: [], errors: [] };
     },
+
+    async Collections(): Promise<CollectionsResult> {
+      await delay(300);
+      return {
+        collections: db.collections.map((c) => ({
+          id: c.id,
+          name: c.name,
+          addon_count: c.addons.length,
+          active: c.id === db.activeCollectionId,
+        })),
+        active_id: db.activeCollectionId,
+      };
+    },
+
+    async CreateCollection(name: string): Promise<CollectionInfo> {
+      await delay(400);
+      const trimmed = name.trim();
+      if (!trimmed) throw new Error("Collection name is required");
+      const id = uniqueId(slugify(trimmed), db.collections.map((c) => c.id));
+      db.collections.push({ id, name: trimmed, addons: [] });
+      return { id, name: trimmed, addon_count: 0, active: false };
+    },
+
+    async SwitchCollection(id: string): Promise<SwitchCollectionResult> {
+      await delay(450);
+      const c = db.collections.find((x) => x.id === id);
+      if (!c) throw new Error(`Collection "${id}" not found`);
+      db.activeCollectionId = id;
+      const applied = c.addons.filter((a) => a.enabled).map((a) => a.folder);
+      return {
+        applied,
+        message: `Switched to “${c.name}” — ${applied.length} addon folder${applied.length === 1 ? "" : "s"} renamed to match (backup snapshot taken first)`,
+      };
+    },
+
+    async DeleteCollection(id: string): Promise<void> {
+      await delay(400);
+      const idx = db.collections.findIndex((x) => x.id === id);
+      if (idx < 0) throw new Error(`Collection "${id}" not found`);
+      db.collections.splice(idx, 1);
+      if (db.activeCollectionId === id) db.activeCollectionId = "";
+    },
+
+    async CollectionDetail(id: string): Promise<CollectionDetail> {
+      await delay(300);
+      const c = db.collections.find((x) => x.id === id);
+      if (!c) throw new Error(`Collection "${id}" not found`);
+      return {
+        id: c.id,
+        name: c.name,
+        addons: c.addons.map((a) => ({ ...a })),
+      };
+    },
+
+    async SetCollectionAddon(id: string, folder: string, enabled: boolean): Promise<void> {
+      await delay(250);
+      const c = db.collections.find((x) => x.id === id);
+      if (!c) throw new Error(`Collection "${id}" not found`);
+      const a = c.addons.find((x) => x.folder === folder);
+      if (!a) throw new Error(`Addon "${folder}" is not in collection "${c.name}"`);
+      a.enabled = enabled;
+    },
+
+    async InstallsStatus(): Promise<InstallsStatusResult> {
+      await delay(350);
+      return { installs: INSTALLS_STATUS.map((i) => ({ ...i })) };
+    },
+
+    async SyncUpdatesToAll(allowReplace: boolean): Promise<SyncResult> {
+      await delay(1200);
+      return {
+        installs: [
+          {
+            root: "C:\\Games\\ChromieCraft",
+            updated: 2,
+            failed: 0,
+            errors: [],
+          },
+        ],
+        total_updated: 2,
+        total_failed: 0,
+      };
+    },
   };
 }
 
@@ -916,6 +1096,23 @@ function folderFor(name: string): string {
     default:
       return name.replace(/[^A-Za-z0-9]/g, "");
   }
+}
+
+function slugify(s: string): string {
+  const slug = s
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "collection";
+}
+
+// Make `base` unique against `existing` ids by appending -2, -3, …
+function uniqueId(base: string, existing: string[]): string {
+  if (!existing.includes(base)) return base;
+  let n = 2;
+  while (existing.includes(`${base}-${n}`)) n++;
+  return `${base}-${n}`;
 }
 
 function applyFix(db: MockDB, folderName: string, allowDestructive: boolean): FixResult {
