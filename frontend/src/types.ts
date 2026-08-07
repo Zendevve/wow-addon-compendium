@@ -130,6 +130,63 @@ export interface InstallResult {
   errors: string[];
 }
 
+/** Addon update sources (used for provider chips/badges). */
+export type Provider = "github" | "curseforge" | "wowinterface" | "tukui";
+
+export interface UpdateEntry {
+  folder: string;
+  title: string;
+  current_version: string;
+  latest_version: string;
+  provider: Provider;
+  id: string;
+  source: string;
+  flavor_mismatch: boolean;
+  flavor_label: string;
+}
+
+export interface CheckUpdatesResult {
+  updates: UpdateEntry[];
+  errors: string[];
+  checked_at: string;
+}
+
+export interface ApplyEntry {
+  folder: string;
+  ok: boolean;
+  message: string;
+  error: string;
+}
+
+export interface ApplyBatch {
+  applied: ApplyEntry[];
+  applied_count: number;
+  failed_count: number;
+}
+
+export interface CatalogEntry {
+  provider: Provider;
+  name: string;
+  author: string;
+  summary: string;
+  latest_version: string;
+  game_version: string;
+  id: string;
+  homepage: string;
+}
+
+export interface SearchCatalogResult {
+  results: CatalogEntry[];
+  errors: string[];
+}
+
+export interface InstallSourceResult {
+  installed: string[];
+  replaced: string[];
+  skipped: string[];
+  errors: string[];
+}
+
 /** The Service surface exposed by `window.go.service.Service`. */
 export interface Service {
   GetState(): Promise<State>;
@@ -142,9 +199,14 @@ export interface Service {
   Fix(folderName: string, allowDestructive: boolean): Promise<FixResult>;
   FixAll(allowDestructive: boolean): Promise<FixResult>;
   InstallZip(zipPath: string, allowReplace: boolean): Promise<InstallResult>;
+  CheckUpdates(): Promise<CheckUpdatesResult>;
+  ApplyUpdate(folder: string, allowReplace: boolean): Promise<ApplyBatch>;
+  ApplyAllUpdates(allowReplace: boolean): Promise<ApplyBatch>;
+  SearchCatalog(query: string): Promise<SearchCatalogResult>;
+  InstallSource(source: string, allowReplace: boolean): Promise<InstallSourceResult>;
 }
 
-export type View = "setup" | "scan" | "validate" | "install";
+export type View = "setup" | "scan" | "validate" | "install" | "updates" | "catalog";
 
 export const DESTRUCTIVE_ACTIONS = new Set(["delete", "merge"]);
 

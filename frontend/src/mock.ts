@@ -9,6 +9,7 @@
 //   index.html?mock=1            -> installed state, scan view
 //   index.html?mock=1&state=setup -> first-run state (no install)
 //   index.html?mock=1&view=validate / view=install -> open a specific tab
+//   index.html?mock=1&view=updates / view=catalog -> new-tab screenshots
 
 import type {
   Service,
@@ -19,9 +20,15 @@ import type {
   ValidateResult,
   FixResult,
   InstallResult,
+  InstallSourceResult,
   Addon,
   Issue,
   CompatEntry,
+  UpdateEntry,
+  ApplyBatch,
+  CatalogEntry,
+  CheckUpdatesResult,
+  SearchCatalogResult,
 } from "./types";
 
 const DELAY_MS = 350;
@@ -95,7 +102,132 @@ interface MockDB {
   scanErrors: string[];
   scannedAt: string;
   lastInstall: InstallResult | null;
+  tracked: UpdateEntry[];
 }
+
+// Addons the updater follows. Mutable: ApplyUpdate / ApplyAllUpdates bump
+// current_version to latest_version (and clear flavor_mismatch), so the next
+// CheckUpdates reflects what was applied.
+const TRACKED_UPDATES: UpdateEntry[] = [
+  {
+    folder: "Questie",
+    title: "Questie",
+    current_version: "1.12.2",
+    latest_version: "1.13.0",
+    provider: "github",
+    id: "Questie/Questie",
+    source: "https://github.com/Questie/Questie",
+    flavor_mismatch: false,
+    flavor_label: "",
+  },
+  {
+    folder: "DeadlyBossMods",
+    title: "Deadly Boss Mods",
+    current_version: "9.5.2",
+    latest_version: "9.5.9",
+    provider: "curseforge",
+    id: "deadly-boss-mods",
+    source: "https://www.curseforge.com/wow/addons/deadly-boss-mods",
+    flavor_mismatch: true,
+    flavor_label: "retail addon · profile wrath",
+  },
+  {
+    folder: "WeakAuras",
+    title: "WeakAuras 2",
+    current_version: "5.12.5",
+    latest_version: "5.12.5",
+    provider: "tukui",
+    id: "weakauras2",
+    source: "https://www.tukui.org/addons.php?id=weakauras2",
+    flavor_mismatch: false,
+    flavor_label: "",
+  },
+];
+
+// Fixed catalog pool, one representative addon per provider. SearchCatalog
+// filters by query substring; the view filters by provider chip client-side.
+const CATALOG_POOL: CatalogEntry[] = [
+  {
+    provider: "github",
+    name: "Questie",
+    author: "Questie Team",
+    summary: "Quest helper for Classic and Wrath with full quest data, waypoints and objectives.",
+    latest_version: "1.13.0",
+    game_version: "wrath",
+    id: "Questie/Questie",
+    homepage: "https://github.com/Questie/Questie",
+  },
+  {
+    provider: "github",
+    name: "Grid2",
+    author: "michael",
+    summary: "Modular grid-based raid frames with lightweight, customizable unit bars.",
+    latest_version: "2.0.9",
+    game_version: "",
+    id: "michael/grid2",
+    homepage: "https://github.com/michael/grid2",
+  },
+  {
+    provider: "curseforge",
+    name: "Deadly Boss Mods",
+    author: "MysticalOS",
+    summary: "Boss encounter alerts, timers and warnings for dungeons and raids.",
+    latest_version: "9.5.9",
+    game_version: "retail",
+    id: "deadly-boss-mods",
+    homepage: "https://www.curseforge.com/wow/addons/deadly-boss-mods",
+  },
+  {
+    provider: "curseforge",
+    name: "Details!",
+    author: "Terciob",
+    summary: "Damage and healing meter with deep breakdowns, graphs and custom skins.",
+    latest_version: "3.10.6",
+    game_version: "retail",
+    id: "details",
+    homepage: "https://www.curseforge.com/wow/addons/details",
+  },
+  {
+    provider: "wowinterface",
+    name: "Plater Nameplates",
+    author: "Devv",
+    summary: "Highly configurable nameplates with threat coloring, scripts and profiles.",
+    latest_version: "1.11.4",
+    game_version: "retail",
+    id: "plater-nameplates",
+    homepage: "https://www.wowinterface.com/downloads/info24911-PlaterNameplates.html",
+  },
+  {
+    provider: "wowinterface",
+    name: "BigWigs Boss Mods",
+    author: "BigWigs",
+    summary: "Boss mod with precise pull timers and minimal, readable alerts.",
+    latest_version: "10.2.2",
+    game_version: "wrath",
+    id: "bigwigs-boss-mods",
+    homepage: "https://www.wowinterface.com/downloads/info3656-BigWigsBossMods.html",
+  },
+  {
+    provider: "tukui",
+    name: "WeakAuras 2",
+    author: "Luxocracy",
+    summary: "Powerful aura display framework — icons, bars, textures and custom code.",
+    latest_version: "5.12.5",
+    game_version: "retail",
+    id: "weakauras2",
+    homepage: "https://www.tukui.org/addons.php?id=weakauras2",
+  },
+  {
+    provider: "tukui",
+    name: "ElvUI",
+    author: "Elv",
+    summary: "Complete UI replacement: unit frames, action bars, bags and chat skins.",
+    latest_version: "13.85",
+    game_version: "retail",
+    id: "elvui",
+    homepage: "https://www.tukui.org/addons.php?id=elvui",
+  },
+];
 
 function issue(
   partial: Partial<Issue> & { kind: string; severity: Issue["severity"] },
@@ -426,6 +558,7 @@ function freshDB(): MockDB {
     scanErrors: [],
     scannedAt: new Date().toISOString(),
     lastInstall: null,
+    tracked: TRACKED_UPDATES.map((u) => ({ ...u })),
   };
 }
 
@@ -607,7 +740,131 @@ export function createMockService(): Service {
       db.scannedAt = new Date().toISOString();
       return result;
     },
+
+    async CheckUpdates(): Promise<CheckUpdatesResult> {
+      await delay(600);
+      const updates = db.tracked.filter(
+        (u) => u.current_version !== u.latest_version,
+      );
+      return {
+        updates: updates.map((u) => ({ ...u })),
+        errors: [],
+        checked_at: new Date().toISOString(),
+      };
+    },
+
+    async ApplyUpdate(folder: string, allowReplace: boolean): Promise<ApplyBatch> {
+      await delay(700);
+      const u = db.tracked.find((x) => x.folder === folder);
+      if (!u) {
+        return {
+          applied: [
+            { folder, ok: false, message: "Addon is not tracked", error: "unknown folder" },
+          ],
+          applied_count: 0,
+          failed_count: 1,
+        };
+      }
+      u.current_version = u.latest_version;
+      u.flavor_mismatch = false;
+      u.flavor_label = "";
+      return {
+        applied: [{ folder, ok: true, message: `Updated to ${u.latest_version}`, error: "" }],
+        applied_count: 1,
+        failed_count: 0,
+      };
+    },
+
+    async ApplyAllUpdates(allowReplace: boolean): Promise<ApplyBatch> {
+      await delay(1100);
+      const applied: ApplyBatch["applied"] = [];
+      for (const u of db.tracked) {
+        if (u.current_version === u.latest_version) continue;
+        u.current_version = u.latest_version;
+        u.flavor_mismatch = false;
+        u.flavor_label = "";
+        applied.push({
+          folder: u.folder,
+          ok: true,
+          message: `Updated to ${u.latest_version}`,
+          error: "",
+        });
+      }
+      return { applied, applied_count: applied.length, failed_count: 0 };
+    },
+
+    async SearchCatalog(query: string): Promise<SearchCatalogResult> {
+      await delay(500);
+      const q = query.trim().toLowerCase();
+      const results = CATALOG_POOL.filter(
+        (c) =>
+          q.length === 0 ||
+          [c.name, c.author, c.summary, c.id].join(" ").toLowerCase().includes(q),
+      ).map((c) => ({ ...c }));
+      return { results, errors: [] };
+    },
+
+    async InstallSource(source: string, allowReplace: boolean): Promise<InstallSourceResult> {
+      await delay(900);
+      const src = source.trim();
+      const found =
+        CATALOG_POOL.find((c) => c.id.toLowerCase() === src.toLowerCase()) ?? null;
+      const display = found?.name ?? displayNameFromSource(src);
+      const folder = found ? folderFor(found.name) : folderFor(displayNameFromSource(src));
+      const exists = db.addons.some(
+        (a) => a.folder_name.toLowerCase() === folder.toLowerCase(),
+      );
+      if (exists && !allowReplace) {
+        return { installed: [], replaced: [], skipped: [folder], errors: [] };
+      }
+      if (!exists) {
+        db.addons.push({
+          folder_name: folder,
+          base_name: folder,
+          suggested_name: folder,
+          status: "ok",
+          nested: false,
+          size_bytes: 1048576 + (folder.length % 9) * 262144,
+          fixable: false,
+          toc: {
+            path: `${db.install?.addons_dir ?? "C:\\Games\\World of Warcraft Classic\\Interface\\AddOns"}\\${folder}\\${folder}.toc`,
+            name: folder,
+            title: display,
+            interface: 30300,
+            raw_interface: "30300",
+            version: found?.latest_version ?? "1.0",
+            primary: true,
+          },
+          issues: [],
+          compat: [compat(`${folder}.toc`, 30300)],
+        });
+        db.scannedAt = new Date().toISOString();
+        return { installed: [folder], replaced: [], skipped: [], errors: [] };
+      }
+      return { installed: [], replaced: [folder], skipped: [], errors: [] };
+    },
   };
+}
+
+// Derive a display name for sources the catalog does not know, e.g.
+// "owner/repo", a GitHub URL, or a direct ZIP link.
+function displayNameFromSource(src: string): string {
+  const seg = src.split(/[\\/?#]/).filter(Boolean).pop() ?? src;
+  return seg.replace(/\.zip$/i, "").replace(/[-_](main|master)$/i, "");
+}
+
+// Canonical folder name for a known catalog addon.
+function folderFor(name: string): string {
+  switch (name) {
+    case "WeakAuras 2":
+      return "WeakAuras";
+    case "Plater Nameplates":
+      return "Plater";
+    case "Details!":
+      return "Details";
+    default:
+      return name.replace(/[^A-Za-z0-9]/g, "");
+  }
 }
 
 function applyFix(db: MockDB, folderName: string, allowDestructive: boolean): FixResult {

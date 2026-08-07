@@ -74,7 +74,14 @@ export function confirmDialog(opts: ConfirmOpts): Promise<boolean> {
     if (e.key === "Escape") done(false);
     if (e.key === "Enter") {
       const t = e.target as HTMLElement;
-      if (t.tagName !== "BUTTON") done(true);
+      // Enter from a form field is a submit keystroke for that field, not a
+      // confirmation of the dialog that opened in response to it.
+      if (
+        t.tagName !== "BUTTON" &&
+        !["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName)
+      ) {
+        done(true);
+      }
     }
   }
 

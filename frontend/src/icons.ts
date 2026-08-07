@@ -27,7 +27,8 @@ export type IconName =
   | "radar"
   | "table"
   | "warning-oct"
-  | "archive";
+  | "archive"
+  | "download";
 
 const P: Record<IconName, string> = {
   shield:
@@ -74,6 +75,8 @@ const P: Record<IconName, string> = {
     '<path d="M8.2 3.5h7.6L20.5 8.2v7.6l-4.7 4.7H8.2L3.5 15.8V8.2L8.2 3.5Z"/><path d="M12 8v4.5"/><path d="M12 16v.1"/>',
   archive:
     '<rect x="3.5" y="4" width="17" height="4" rx="1"/><path d="M5 8v11a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19V8"/><path d="M10 12h4"/>',
+  download:
+    '<path d="M12 3.5v10"/><path d="m7.8 9.3 4.2 4.2 4.2-4.2"/><path d="M4.5 17.5v2A1.5 1.5 0 0 0 6 21h12a1.5 1.5 0 0 0 1.5-1.5v-2"/>',
 };
 
 const ATTRS =

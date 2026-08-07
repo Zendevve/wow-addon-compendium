@@ -23,6 +23,8 @@ import { mountSetup } from "./views/setup";
 import { mountScan } from "./views/scan";
 import { mountValidate } from "./views/validate";
 import { mountInstall } from "./views/install";
+import { mountUpdates } from "./views/updates";
+import { mountCatalog } from "./views/catalog";
 
 const appEl = document.getElementById("app")!;
 appEl.innerHTML = `
@@ -44,6 +46,8 @@ mountDialog(appEl);
 const TABS: { view: View; label: string; glyph: string }[] = [
   { view: "scan", label: "Scan", glyph: "list" },
   { view: "validate", label: "Validation", glyph: "table" },
+  { view: "updates", label: "Updates", glyph: "refresh" },
+  { view: "catalog", label: "Catalog", glyph: "search" },
   { view: "install", label: "Install", glyph: "package" },
 ];
 
@@ -58,9 +62,10 @@ function boot(): void {
         service.Profiles(),
       ]);
       const requested = new URLSearchParams(window.location.search).get("view");
+      const allowedViews: View[] = ["scan", "validate", "install", "updates", "catalog"];
       const initialView: View = state.has_install
-        ? requested === "validate" || requested === "install" || requested === "scan"
-          ? requested
+        ? allowedViews.includes(requested as View)
+          ? (requested as View)
           : "scan"
         : "setup";
       app = {
@@ -464,6 +469,12 @@ function mountView(): void {
       break;
     case "install":
       current = mountInstall(content, app, actions);
+      break;
+    case "updates":
+      current = mountUpdates(content, app, actions);
+      break;
+    case "catalog":
+      current = mountCatalog(content, app, actions);
       break;
   }
 }

@@ -64,6 +64,32 @@ function normalize(name: keyof Service, p: Promise<unknown>): Promise<unknown> {
         z.errors = z.errors ?? [];
         return z;
       }
+      case "CheckUpdates": {
+        const u = raw as Record<string, unknown>;
+        u.updates = u.updates ?? [];
+        u.errors = u.errors ?? [];
+        return u;
+      }
+      case "ApplyUpdate":
+      case "ApplyAllUpdates": {
+        const b = raw as Record<string, unknown>;
+        b.applied = b.applied ?? [];
+        return b;
+      }
+      case "SearchCatalog": {
+        const c = raw as Record<string, unknown>;
+        c.results = c.results ?? [];
+        c.errors = c.errors ?? [];
+        return c;
+      }
+      case "InstallSource": {
+        const s = raw as Record<string, unknown>;
+        s.installed = s.installed ?? [];
+        s.replaced = s.replaced ?? [];
+        s.skipped = s.skipped ?? [];
+        s.errors = s.errors ?? [];
+        return s;
+      }
       default:
         return raw;
     }
@@ -83,4 +109,11 @@ export const service: Service = {
   FixAll: (allowDestructive) => call("FixAll", allowDestructive),
   InstallZip: (zipPath, allowReplace) =>
     call("InstallZip", zipPath, allowReplace),
+  CheckUpdates: () => call("CheckUpdates"),
+  ApplyUpdate: (folder, allowReplace) =>
+    call("ApplyUpdate", folder, allowReplace),
+  ApplyAllUpdates: (allowReplace) => call("ApplyAllUpdates", allowReplace),
+  SearchCatalog: (query) => call("SearchCatalog", query),
+  InstallSource: (source, allowReplace) =>
+    call("InstallSource", source, allowReplace),
 };
