@@ -54,6 +54,11 @@ A text preview of the scan list, as rendered by the retired terminal UI:
   against its provider and applies newer releases. Update safety:
   updates targeting a different game version are flagged (⚠) and
   skipped by default unless you confirm.
+- **Pin / ignore / rollback** — tracked addons can be pinned (locked at
+  their current version, skipped by update checks until unpinned) or
+  ignored (excluded from update management entirely); any tracked addon
+  can be rolled back to its most recent backup snapshot (the current
+  state is snapshotted first, and the addon is re-pinned afterwards).
 - **Integrity tracking** — every catalog install/update records a content
   checksum of the installed addon folder, so post-install drift (manual
   edits, tampering, partial overwrites) can be detected.
