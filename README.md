@@ -54,6 +54,9 @@ A text preview of the scan list, as rendered by the retired terminal UI:
   against its provider and applies newer releases. Update safety:
   updates targeting a different game version are flagged (⚠) and
   skipped by default unless you confirm.
+- **Integrity tracking** — every catalog install/update records a content
+  checksum of the installed addon folder, so post-install drift (manual
+  edits, tampering, partial overwrites) can be detected.
 - **Addon profiles** — capture the current addon setup as a named
   collection (PvE/PvP/Raiding/Leveling presets) and switch between
   them; switching renames folders to `<name>.disabled` and back.

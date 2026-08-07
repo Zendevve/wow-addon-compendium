@@ -314,3 +314,138 @@ func addonNames(addons []*Addon) string {
 	}
 	return strings.Join(names, ", ")
 }
+
+func TestComputeManifest(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "Addon")
+	write := func(name, content string) {
+		t.Helper()
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("Addon.toc", "## Version: 1.0.0\n")
+	write("Libs/Lib.lua", "local L = {}\n")
+
+	first, err := ComputeManifest(dir)
+	if err != nil {
+		t.Fatalf("ComputeManifest: %v", err)
+	}
+	if first == "" {
+		t.Fatal("manifest digest is empty")
+	}
+	// Deterministic: an unchanged tree hashes identically.
+	again, err := ComputeManifest(dir)
+	if err != nil {
+		t.Fatalf("ComputeManifest (repeat): %v", err)
+	}
+	if again != first {
+		t.Errorf("determinism violated: %q != %q", again, first)
+	}
+	// Adding a file changes the digest.
+	write("extra.lua", "-- new\n")
+	withExtra, err := ComputeManifest(dir)
+	if err != nil {
+		t.Fatalf("ComputeManifest (added file): %v", err)
+	}
+	if withExtra == first {
+		t.Error("adding a file did not change the digest")
+	}
+	// Modifying a file's contents changes the digest.
+	write("Libs/Lib.lua", "local L = {changed = true}\n")
+	modified, err := ComputeManifest(dir)
+	if err != nil {
+		t.Fatalf("ComputeManifest (modified file): %v", err)
+	}
+	if modified == withExtra {
+		t.Error("modifying a file did not change the digest")
+	}
+}
+
+func TestComputeManifestEmptyAndMissing(t *testing.T) {
+	digest, err := ComputeManifest(t.TempDir())
+	if err != nil {
+		t.Fatalf("ComputeManifest on empty dir: %v", err)
+	}
+	if digest == "" {
+		t.Error("empty dir should hash to a non-empty digest")
+	}
+	if _, err := ComputeManifest(filepath.Join(t.TempDir(), "nope")); err == nil {
+		t.Error("ComputeManifest on a missing dir should error")
+	}
+}
+
+func TestInstallRecordsManifestChecksum(t *testing.T) {
+	var ts *httptest.Server
+	zipData := addonZip(t, "TestAddon", "## Title: TestAddon\n## Version: 1.0.0\n## Interface: 30300\n")
+	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/acme/testaddon":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"full_name": "acme/testaddon",
+				"name": "testaddon",
+				"description": "A test addon",
+				"html_url": "https://github.com/acme/testaddon",
+				"default_branch": "main",
+				"owner": {"login": "acme"}
+			}`))
+		case "/repos/acme/testaddon/releases/latest":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{
+				"tag_name": "v1.0.0",
+				"assets": [{"name": "testaddon.zip", "browser_download_url": "%s/testaddon.zip"}]
+			}`, ts.URL)
+		case "/testaddon.zip":
+			w.Write(zipData)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	c := &Catalog{
+		providers: map[string]Provider{ProviderGitHub: newGitHubProvider(ts.Client(), ts.URL, ts.URL)},
+	}
+	addonsDir := filepath.Join(t.TempDir(), "AddOns")
+	if err := os.MkdirAll(addonsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := NewRegistry(filepath.Join(t.TempDir(), "registry.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Reg = reg
+
+	if _, err := c.InstallFromSource(context.Background(), "https://github.com/acme/testaddon", addonsDir, nil); err != nil {
+		t.Fatalf("InstallFromSource: %v", err)
+	}
+	entries := reg.Entries()
+	if len(entries) != 1 {
+		t.Fatalf("registry entries = %d, want 1", len(entries))
+	}
+	stored := entries[0].Checksum
+	if stored == "" {
+		t.Fatal("installed entry has no checksum")
+	}
+	if want, err := ComputeManifest(filepath.Join(addonsDir, "TestAddon")); err != nil {
+		t.Fatalf("ComputeManifest: %v", err)
+	} else if stored != want {
+		t.Errorf("stored checksum %q does not match computed %q", stored, want)
+	}
+	// Post-install drift (e.g. a manual edit) must change the digest.
+	toc := filepath.Join(addonsDir, "TestAddon", "TestAddon.toc")
+	if err := os.WriteFile(toc, []byte("## Title: TestAddon\n## Version: 1.0.0\n## Interface: 30300\n-- edited\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	drifted, err := ComputeManifest(filepath.Join(addonsDir, "TestAddon"))
+	if err != nil {
+		t.Fatalf("ComputeManifest after edit: %v", err)
+	}
+	if drifted == stored {
+		t.Error("checksum unchanged after editing an installed file")
+	}
+}

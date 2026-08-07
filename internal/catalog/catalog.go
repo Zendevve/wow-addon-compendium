@@ -21,8 +21,11 @@ package catalog
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -234,6 +237,49 @@ func (c *Catalog) InstallFromSource(ctx context.Context, source, addonsDir strin
 	return c.installAddon(ctx, prov, addon, addonsDir, source, progress)
 }
 
+// ComputeManifest returns a deterministic content digest of every file
+// under dir. For each file it hashes the slash-separated path relative
+// to dir, a NUL byte and the file's contents with SHA-256; the
+// per-file digests are sorted by path and hashed again, then
+// hex-encoded. Paths are sorted and no timestamps or directory entries
+// participate, so identical trees always yield identical digests
+// regardless of filesystem ordering. An empty dir hashes the empty
+// input and yields a non-empty digest; a missing dir is an error.
+func ComputeManifest(dir string) (string, error) {
+	var rels []string
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		rels = append(rels, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("manifest %q: %w", dir, err)
+	}
+	sort.Strings(rels)
+	h := sha256.New()
+	for _, rel := range rels {
+		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil {
+			return "", fmt.Errorf("manifest %q: read %s: %w", dir, rel, err)
+		}
+		fh := sha256.New()
+		fh.Write([]byte(rel))
+		fh.Write([]byte{0})
+		fh.Write(data)
+		h.Write(fh.Sum(nil))
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 // installAddon downloads, installs and registers one resolved addon.
 func (c *Catalog) installAddon(ctx context.Context, prov Provider, addon *Addon, addonsDir, source string, progress func(done, total int64)) ([]string, error) {
 	tmp, err := os.CreateTemp("", "wowfix-download-*.zip")
@@ -271,6 +317,10 @@ func (c *Catalog) installAddon(ctx context.Context, prov Provider, addon *Addon,
 			if v := readTOCVersion(filepath.Join(addonsDir, folder)); v != "" {
 				version = v
 			}
+			// Best-effort provenance: a manifest failure (e.g. a
+			// folder that vanished between install and registration)
+			// leaves Checksum empty rather than failing the install.
+			checksum, _ := ComputeManifest(filepath.Join(addonsDir, folder))
 			if err := c.Reg.Track(Entry{
 				Folder:   folder,
 				Title:    addon.Name,
@@ -278,6 +328,7 @@ func (c *Catalog) installAddon(ctx context.Context, prov Provider, addon *Addon,
 				Provider: addon.Provider,
 				ID:       addon.ID,
 				Source:   source,
+				Checksum: checksum,
 			}); err != nil {
 				return res.Installed, err
 			}

@@ -20,6 +20,11 @@ type Entry struct {
 	ID          string    `json:"id"`
 	Source      string    `json:"source"`
 	InstalledAt time.Time `json:"installed_at"`
+	// Checksum is the content digest of the installed folder recorded
+	// at install/update time (see ComputeManifest). Empty for entries
+	// installed before integrity tracking existed or when the manifest
+	// could not be computed; this field is best-effort provenance.
+	Checksum string `json:"checksum,omitempty"`
 }
 
 // Registry persists the set of addons installed through the catalog

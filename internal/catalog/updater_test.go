@@ -206,6 +206,13 @@ func TestApplyInstallsAndTracks(t *testing.T) {
 	if e.Provider != "testprov" || e.ID != "Questie" || e.Source != "https://github.com/x/questie" {
 		t.Errorf("entry = %+v", e)
 	}
+	if e.Checksum == "" {
+		t.Error("updated entry has no checksum")
+	} else if want, err := ComputeManifest(filepath.Join(addonsDir, "Questie")); err != nil {
+		t.Fatalf("ComputeManifest: %v", err)
+	} else if e.Checksum != want {
+		t.Errorf("stored checksum %q does not match computed %q", e.Checksum, want)
+	}
 }
 
 func TestApplyReplacesAndBacksUp(t *testing.T) {

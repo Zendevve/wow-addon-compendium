@@ -190,6 +190,9 @@ func Apply(ctx context.Context, catalog *Catalog, installDir string, u Update, b
 		if title == "" {
 			title = u.Entry.Title
 		}
+		// Best-effort provenance, same rule as installs: a manifest
+		// failure records no checksum instead of failing the update.
+		checksum, _ := ComputeManifest(filepath.Join(installDir, folder))
 		if err := catalog.Reg.Track(Entry{
 			Folder:   folder,
 			Title:    title,
@@ -197,6 +200,7 @@ func Apply(ctx context.Context, catalog *Catalog, installDir string, u Update, b
 			Provider: latest.Provider,
 			ID:       latest.ID,
 			Source:   u.Entry.Source,
+			Checksum: checksum,
 		}); err != nil {
 			return folder, err
 		}
