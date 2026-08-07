@@ -5,6 +5,7 @@ package service
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,9 @@ import (
 
 	"github.com/wowfix/wowfix/internal/catalog"
 	"github.com/wowfix/wowfix/internal/config"
+	"github.com/wowfix/wowfix/internal/detector"
+	"github.com/wowfix/wowfix/internal/models"
+	"github.com/wowfix/wowfix/internal/scanner"
 )
 
 // writeFixture recreates the testdata/wow fixture layout in a temp
@@ -807,5 +811,344 @@ func TestRestoreAddon(t *testing.T) {
 	}
 	if entries[0].Checksum != got {
 		t.Errorf("recorded checksum %q != computed %q", entries[0].Checksum, got)
+	}
+}
+
+// collectionTestService wires a Service to a temp config with an
+// install whose AddOns dir holds the given folder names, plus a temp
+// collections dir via cfg.CollectionsDir.
+func collectionTestService(t *testing.T, folders ...string) (*Service, string) {
+	t.Helper()
+	store := config.NewStoreAt(filepath.Join(t.TempDir(), "config.json"))
+	cfg := config.Default()
+	root := t.TempDir()
+	addonsDir := filepath.Join(root, "Interface", "AddOns")
+	for _, name := range folders {
+		if err := os.MkdirAll(filepath.Join(addonsDir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg.WoWPath = root
+	cfg.Flavor = ""
+	cfg.CollectionsDir = filepath.Join(t.TempDir(), "collections")
+	if err := store.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	return New(store), addonsDir
+}
+
+// TestCollectionsLifecycle walks the collection CRUD surface: create
+// snapshots the on-disk folders (enabled and .disabled both counted),
+// list reports one inactive collection, SetCollectionAddon /
+// CollectionDetail round-trip the toggle, and delete empties the list.
+func TestCollectionsLifecycle(t *testing.T) {
+	s, _ := collectionTestService(t, "A", "A.disabled")
+
+	created, err := s.CreateCollection("pve")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if created.Active {
+		t.Error("created collection must not be active")
+	}
+	if created.AddonCount != 2 {
+		t.Errorf("addon_count = %d, want 2 (A enabled + A.disabled)", created.AddonCount)
+	}
+
+	res, err := s.Collections()
+	if err != nil {
+		t.Fatalf("Collections: %v", err)
+	}
+	if res.ActiveID != "" {
+		t.Errorf("active_id = %q, want empty (create must not activate)", res.ActiveID)
+	}
+	if len(res.Collections) != 1 {
+		t.Fatalf("collections = %d, want 1", len(res.Collections))
+	}
+	c := res.Collections[0]
+	if c.ID != created.ID || c.Name != "pve" || c.Active || c.AddonCount != 2 {
+		t.Errorf("collection = %+v, want id/name %q/%q, active=false, addon_count=2",
+			c, created.ID, "pve")
+	}
+
+	// Toggle the shared folder off: every recorded entry turns disabled.
+	if err := s.SetCollectionAddon(created.ID, "A", false); err != nil {
+		t.Fatalf("SetCollectionAddon(false): %v", err)
+	}
+	detail, err := s.CollectionDetail(created.ID)
+	if err != nil {
+		t.Fatalf("CollectionDetail: %v", err)
+	}
+	if detail.ID != created.ID || detail.Name != "pve" || len(detail.Addons) != 2 {
+		t.Fatalf("detail = %+v, want 2 addon rows", detail)
+	}
+	for _, a := range detail.Addons {
+		if a.Folder != "A" {
+			t.Errorf("addon folder = %q, want A", a.Folder)
+		}
+		if a.Enabled {
+			t.Errorf("addon %q still enabled after SetCollectionAddon(false)", a.Folder)
+		}
+	}
+
+	// Toggle back on: at least the first entry flips to enabled.
+	if err := s.SetCollectionAddon(created.ID, "A", true); err != nil {
+		t.Fatalf("SetCollectionAddon(true): %v", err)
+	}
+	detail, err = s.CollectionDetail(created.ID)
+	if err != nil {
+		t.Fatalf("CollectionDetail after toggle: %v", err)
+	}
+	enabled := 0
+	for _, a := range detail.Addons {
+		if a.Enabled {
+			enabled++
+		}
+	}
+	if enabled == 0 {
+		t.Error("no enabled addons after SetCollectionAddon(true)")
+	}
+
+	if err := s.DeleteCollection(created.ID); err != nil {
+		t.Fatalf("DeleteCollection: %v", err)
+	}
+	after, err := s.Collections()
+	if err != nil {
+		t.Fatalf("Collections after delete: %v", err)
+	}
+	if len(after.Collections) != 0 {
+		t.Errorf("collections after delete = %d, want 0", len(after.Collections))
+	}
+}
+
+// TestSwitchCollection activates a collection and verifies the folder
+// renames on disk, the applied list, and that the active collection id
+// is persisted in the saved config. The second switch exercises the
+// reverse rename (A.disabled -> A) with a collection that wants the
+// addon enabled.
+func TestSwitchCollection(t *testing.T) {
+	s, addonsDir := collectionTestService(t, "A")
+
+	created, err := s.CreateCollection("pve")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	// On-disk state is A (enabled); record the addon as disabled so
+	// the switch renames A -> A.disabled.
+	if err := s.SetCollectionAddon(created.ID, "A", false); err != nil {
+		t.Fatalf("SetCollectionAddon: %v", err)
+	}
+
+	res, err := s.SwitchCollection(created.ID)
+	if err != nil {
+		t.Fatalf("SwitchCollection: %v", err)
+	}
+	if !slices.Contains(res.Applied, "A") {
+		t.Errorf("applied = %v, want A", res.Applied)
+	}
+	if res.Message == "" {
+		t.Error("message must not be empty")
+	}
+	if _, err := os.Stat(filepath.Join(addonsDir, "A")); !os.IsNotExist(err) {
+		t.Errorf("folder A still present after switch: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(addonsDir, "A.disabled")); err != nil {
+		t.Errorf("folder A.disabled missing after switch: %v", err)
+	}
+
+	// The active collection id is persisted in the saved config.
+	loaded, err := s.store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Collection != created.ID {
+		t.Errorf("cfg.collection = %q, want %q", loaded.Collection, created.ID)
+	}
+
+	// Now the disk holds A.disabled. A second collection that wants the
+	// addon enabled must rename it back.
+	back, err := s.CreateCollection("pve-alt")
+	if err != nil {
+		t.Fatalf("CreateCollection(pve-alt): %v", err)
+	}
+	if err := s.SetCollectionAddon(back.ID, "A", true); err != nil {
+		t.Fatalf("SetCollectionAddon(back): %v", err)
+	}
+	res, err = s.SwitchCollection(back.ID)
+	if err != nil {
+		t.Fatalf("second SwitchCollection: %v", err)
+	}
+	if !slices.Contains(res.Applied, "A") {
+		t.Errorf("second applied = %v, want A", res.Applied)
+	}
+	if _, err := os.Stat(filepath.Join(addonsDir, "A")); err != nil {
+		t.Errorf("folder A missing after switch back: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(addonsDir, "A.disabled")); !os.IsNotExist(err) {
+		t.Errorf("folder A.disabled still present after switch back: %v", err)
+	}
+}
+
+// TestInstallsStatus checks the per-install DTO mapping through the
+// private seam (AutoDetect cannot be pointed at temp dirs): a
+// hand-built installation over the fixture AddOns dir yields the same
+// counts as a direct scan and the average addon health, and a missing
+// AddOns dir stays exists=false with zeroed counts.
+func TestInstallsStatus(t *testing.T) {
+	s, addonsDir := newTestService(t)
+	root := filepath.Dir(filepath.Dir(addonsDir))
+	profile := models.DefaultProfile()
+
+	inst := &detector.Installation{
+		Root:       root,
+		Flavor:     "",
+		AddonsPath: addonsDir,
+		Exe:        "Wow.exe",
+		Version:    "3.4.3",
+		ProfileID:  "wrath",
+		Confidence: "high",
+	}
+	st := s.statusForInstall(inst, profile)
+	if !st.Exists {
+		t.Fatal("exists = false, want true for the fixture addons dir")
+	}
+	if st.Exe != "Wow.exe" || st.Version != "3.4.3" || st.ProfileID != "wrath" || st.Confidence != "high" {
+		t.Errorf("identity fields not copied: %+v", st)
+	}
+
+	// Counts must match an independently run scan of the same dir.
+	direct, err := scanner.New(addonsDir, profile).Scan(context.Background())
+	if err != nil {
+		t.Fatalf("direct scan: %v", err)
+	}
+	wantTotal, wantProblems, wantErrors := direct.Stats()
+	if st.Addons != wantTotal || st.Problems != wantProblems || st.Errors != wantErrors {
+		t.Errorf("counts = %d/%d/%d, want scan stats %d/%d/%d",
+			st.Addons, st.Problems, st.Errors, wantTotal, wantProblems, wantErrors)
+	}
+	if st.Errors == 0 {
+		t.Error("errors = 0, want the fixture's missing-TOC errors")
+	}
+	wantHealth := 0
+	for _, a := range direct.Addons {
+		wantHealth += addonHealth(a)
+	}
+	wantHealth /= wantTotal
+	if st.Health != wantHealth {
+		t.Errorf("health = %d, want %d (average addonHealth over the scan)", st.Health, wantHealth)
+	}
+
+	// Missing AddOns dir: exists false, zeroed counts, zero health.
+	missing := &detector.Installation{Root: root, AddonsPath: filepath.Join(root, "Interface", "Missing")}
+	st2 := s.statusForInstall(missing, profile)
+	if st2.Exists {
+		t.Error("exists = true, want false for a missing addons dir")
+	}
+	if st2.Addons != 0 || st2.Problems != 0 || st2.Errors != 0 || st2.Health != 0 {
+		t.Errorf("missing install counts = %+v, want all zero", st2)
+	}
+}
+
+// TestSyncUpdatesToAll iterates every install with an existing AddOns
+// dir, applies the pending update to each, and aggregates the totals;
+// an install without an AddOns dir is skipped.
+func TestSyncUpdatesToAll(t *testing.T) {
+	s, addonsDir, regPath, mock := newTestCatalogService(t)
+	reg, err := catalog.NewRegistry(regPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Track(catalog.Entry{
+		Folder: "Questie", Title: "Questie", Version: "9.0.0",
+		Provider: "github", ID: "acme/questie", Source: "acme/questie",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mock.repos["acme/questie"] = "v9.2.0"
+	mock.zips["acme/questie"] = addonZipBytes(t, "Questie", "## Title: Questie\n## Version: 9.2.0\n## Interface: 30300\n")
+
+	e, err := s.requireInstall()
+	if err != nil {
+		t.Fatalf("requireInstall: %v", err)
+	}
+
+	// Second install: an existing but empty AddOns dir. Third: no
+	// AddOns dir at all (must be skipped).
+	other := filepath.Join(t.TempDir(), "Interface", "AddOns")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Dir(filepath.Dir(addonsDir))
+	otherRoot := filepath.Dir(filepath.Dir(other))
+	installs := []detector.Installation{
+		{Root: root, Flavor: "", AddonsPath: addonsDir, ProfileID: "wrath", Confidence: "high"},
+		{Root: otherRoot, Flavor: "", AddonsPath: other, ProfileID: "wrath", Confidence: "medium"},
+		{Root: otherRoot, Flavor: "", AddonsPath: filepath.Join(other, "missing"), ProfileID: "wrath", Confidence: "medium"},
+	}
+
+	res := s.syncInstalls(e, installs, true)
+	if len(res.Installs) != 2 {
+		t.Fatalf("rows = %d, want 2 (missing install skipped): %+v", len(res.Installs), res.Installs)
+	}
+	// The registry is shared per-user and re-read per install, so the
+	// first install's apply bumps the recorded version to 9.2.0 and the
+	// second install sees no pending update.
+	if res.TotalUpdated != 1 || res.TotalFailed != 0 {
+		t.Errorf("totals = %d updated / %d failed, want 1 / 0", res.TotalUpdated, res.TotalFailed)
+	}
+	if got := res.Installs[0]; got.Updated != 1 || got.Failed != 0 || len(got.Errors) != 0 {
+		t.Errorf("first row = %+v, want 1 updated / 0 failed / no errors", got)
+	}
+	if got := res.Installs[1]; got.Updated != 0 || got.Failed != 0 || len(got.Errors) != 0 {
+		t.Errorf("second row = %+v, want 0 updated (registry already bumped) / no errors", got)
+	}
+
+	// Only the first install directory received the updated TOC; the
+	// second stays untouched.
+	toc, err := os.ReadFile(filepath.Join(addonsDir, "Questie", "Questie.toc"))
+	if err != nil {
+		t.Fatalf("read updated TOC: %v", err)
+	}
+	if !strings.Contains(string(toc), "## Version: 9.2.0") {
+		t.Errorf("Questie TOC not updated in the first install: %s", toc)
+	}
+	if _, err := os.Stat(filepath.Join(other, "Questie")); !os.IsNotExist(err) {
+		t.Errorf("Questie folder appeared in the second install: %v", err)
+	}
+}
+
+// TestSyncUpdatesToAllCatalogError keeps processing every install when
+// one's catalog cannot be resolved: the failure lands in the row's
+// errors with zero counts and never aborts the loop.
+func TestSyncUpdatesToAllCatalogError(t *testing.T) {
+	s, addonsDir, regPath, _ := newTestCatalogService(t)
+	// A corrupt registry makes catalogFor fail for every install.
+	if err := os.WriteFile(regPath, []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e, err := s.requireInstall()
+	if err != nil {
+		t.Fatalf("requireInstall: %v", err)
+	}
+	root := filepath.Dir(filepath.Dir(addonsDir))
+	installs := []detector.Installation{
+		{Root: root, Flavor: "", AddonsPath: addonsDir, ProfileID: "wrath", Confidence: "high"},
+		{Root: root, Flavor: "", AddonsPath: addonsDir, ProfileID: "wrath", Confidence: "high"},
+	}
+
+	res := s.syncInstalls(e, installs, true)
+	if len(res.Installs) != 2 {
+		t.Fatalf("rows = %d, want 2 (loop must not abort on the first failure)", len(res.Installs))
+	}
+	for _, row := range res.Installs {
+		if row.Updated != 0 || row.Failed != 0 {
+			t.Errorf("row = %+v, want 0 updated / 0 failed on a catalog error", row)
+		}
+		if len(row.Errors) != 1 || !strings.Contains(row.Errors[0], "corrupt") {
+			t.Errorf("row errors = %v, want the corrupt-registry message", row.Errors)
+		}
+	}
+	if res.TotalUpdated != 0 || res.TotalFailed != 0 {
+		t.Errorf("totals = %d updated / %d failed, want 0 / 0", res.TotalUpdated, res.TotalFailed)
 	}
 }

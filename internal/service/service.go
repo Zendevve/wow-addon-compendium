@@ -26,6 +26,7 @@ import (
 	"github.com/wowfix/wowfix/internal/installer"
 	"github.com/wowfix/wowfix/internal/logger"
 	"github.com/wowfix/wowfix/internal/models"
+	"github.com/wowfix/wowfix/internal/profiles"
 	"github.com/wowfix/wowfix/internal/scanner"
 	"github.com/wowfix/wowfix/internal/validator"
 )
@@ -149,6 +150,42 @@ func (s *Service) backupRoot(e *env) string {
 		return filepath.Join(e.install.Root, "Backups")
 	}
 	return filepath.Join(s.store.Dir(), "backups")
+}
+
+// backupRootFor returns where snapshots live for an arbitrary AddOns
+// directory: the saved backups_dir, the Backups folder next to the
+// install that owns the directory, or the config directory. It
+// mirrors backupRoot for cross-install operations where the active
+// install's root does not own the target addons dir.
+func (s *Service) backupRootFor(e *env, addonsDir string) string {
+	if e.cfg.BackupsDir != "" {
+		return e.cfg.BackupsDir
+	}
+	if inst, err := detector.DetectPath(addonsDir); err == nil && inst.Root != "" {
+		return filepath.Join(inst.Root, "Backups")
+	}
+	return filepath.Join(s.store.Dir(), "backups")
+}
+
+// profilesFor builds the collection manager for the environment,
+// mirroring cmd/wowfix's newProfileManager: collections live at the
+// config override or <config dir>/collections, and the manager gets
+// the logger plus (when auto_backup is on) a backup manager for
+// pre-switch snapshots.
+func (s *Service) profilesFor(e *env) (*profiles.Manager, error) {
+	dir := e.cfg.CollectionsDir
+	if dir == "" {
+		dir = filepath.Join(s.store.Dir(), "collections")
+	}
+	m, err := profiles.NewManager(dir, e.install.AddonsPath)
+	if err != nil {
+		return nil, err
+	}
+	m.Log = s.log
+	if e.cfg.AutoBackup {
+		m.Backups = backup.New(s.backupRoot(e), s.log)
+	}
+	return m, nil
 }
 
 // fixerOptions assembles a fixer.Options for the environment. The
@@ -488,6 +525,80 @@ type ApplyBatch struct {
 	Applied      []ApplyEntry `json:"applied"`
 	AppliedCount int          `json:"applied_count"`
 	FailedCount  int          `json:"failed_count"`
+	// errors carries hard per-install failures (e.g. catalog setup)
+	// that are not per-addon outcomes. It is not part of the JSON
+	// contract; SyncUpdatesToAll consumes it for its per-install
+	// error lists.
+	errors []string
+}
+
+// CollectionInfo is one addon collection in the list view.
+type CollectionInfo struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	AddonCount int    `json:"addon_count"`
+	Active     bool   `json:"active"`
+}
+
+// CollectionsResult is the full collection list with the active id.
+type CollectionsResult struct {
+	Collections []CollectionInfo `json:"collections"`
+	ActiveID    string           `json:"active_id"`
+}
+
+// CollectionAddon is one addon's desired state inside a collection.
+type CollectionAddon struct {
+	Folder  string `json:"folder"`
+	Enabled bool   `json:"enabled"`
+}
+
+// CollectionDetail is one collection's full addon state table.
+type CollectionDetail struct {
+	ID     string            `json:"id"`
+	Name   string            `json:"name"`
+	Addons []CollectionAddon `json:"addons"`
+}
+
+// SwitchResult is the outcome of activating a collection.
+type SwitchResult struct {
+	Applied []string `json:"applied"`
+	Message string   `json:"message"`
+}
+
+// InstallStatus is one detected installation with live scan health.
+type InstallStatus struct {
+	Root       string `json:"root"`
+	Flavor     string `json:"flavor"`
+	AddonsPath string `json:"addons_path"`
+	Exe        string `json:"exe"`
+	Version    string `json:"version"`
+	ProfileID  string `json:"profile_id"`
+	Confidence string `json:"confidence"`
+	Exists     bool   `json:"exists"`
+	Addons     int    `json:"addons"`
+	Problems   int    `json:"problems"`
+	Errors     int    `json:"errors"`
+	Health     int    `json:"health"`
+}
+
+// InstallsStatusResult is the status of every detected installation.
+type InstallsStatusResult struct {
+	Installs []InstallStatus `json:"installs"`
+}
+
+// SyncInstallResult is the outcome of a bulk update run for one install.
+type SyncInstallResult struct {
+	Root    string   `json:"root"`
+	Updated int      `json:"updated"`
+	Failed  int      `json:"failed"`
+	Errors  []string `json:"errors"`
+}
+
+// SyncResult aggregates a cross-install bulk update run.
+type SyncResult struct {
+	Installs     []SyncInstallResult `json:"installs"`
+	TotalUpdated int                 `json:"total_updated"`
+	TotalFailed  int                 `json:"total_failed"`
 }
 
 // SearchHit is one addon found by a catalog search.
@@ -636,6 +747,39 @@ func toInstallResult(res *installer.Result) InstallResult {
 	}
 	sort.Strings(out.Skipped)
 	return out
+}
+
+// statusForInstall builds one install status row: scan stats and the
+// average addon health when the AddOns directory exists, zeroes
+// otherwise. A failed scan keeps exists=true and zeroes every count:
+// one broken install never fails the surrounding call.
+func (s *Service) statusForInstall(inst *detector.Installation, profile *models.Profile) InstallStatus {
+	st := InstallStatus{
+		Root:       inst.Root,
+		Flavor:     inst.Flavor,
+		AddonsPath: inst.AddonsPath,
+		Exe:        inst.Exe,
+		Version:    inst.Version,
+		ProfileID:  inst.ProfileID,
+		Confidence: inst.Confidence,
+		Exists:     inst.Exists(),
+	}
+	if !st.Exists {
+		return st
+	}
+	res, err := scanner.New(inst.AddonsPath, profile).Scan(context.Background())
+	if err != nil {
+		return st
+	}
+	st.Addons, st.Problems, st.Errors = res.Stats()
+	if st.Addons > 0 {
+		total := 0
+		for _, a := range res.Addons {
+			total += addonHealth(a)
+		}
+		st.Health = total / st.Addons
+	}
+	return st
 }
 
 // Wails-bound methods -------------------------------------------------------
@@ -921,21 +1065,33 @@ func (s *Service) ApplyAllUpdates(allowReplace bool) (ApplyBatch, error) {
 	if err != nil {
 		return ApplyBatch{}, err
 	}
+	return s.applyAllIn(e, e.install.AddonsPath, allowReplace), nil
+}
+
+// applyAllIn runs the shared apply-all body against one AddOns
+// directory: resolve the catalog for the environment, check the
+// tracked addons against that directory and apply every pending
+// update. The catalog registry is shared per-user; snapshots go next
+// to the install that owns addonsDir. A hard failure (catalog setup)
+// lands in the batch's errors field with zero counts, never aborting
+// the remaining updates.
+func (s *Service) applyAllIn(e *env, addonsDir string, allowReplace bool) ApplyBatch {
 	cat, err := s.catalogFor(e)
 	if err != nil {
-		return ApplyBatch{}, err
+		return ApplyBatch{Applied: []ApplyEntry{}, errors: []string{err.Error()}}
 	}
-	updates, _ := catalog.Check(context.Background(), cat, cat.Reg, e.install.AddonsPath)
+	cat.Backups = backup.New(s.backupRootFor(e, addonsDir), s.log)
+	updates, _ := catalog.Check(context.Background(), cat, cat.Reg, addonsDir)
 	batch := ApplyBatch{Applied: []ApplyEntry{}}
 	for _, u := range updates {
 		entry := ApplyEntry{Folder: u.Entry.Folder}
-		if !allowReplace && folderExists(e.install.AddonsPath, u.Entry.Folder) {
+		if !allowReplace && folderExists(addonsDir, u.Entry.Folder) {
 			entry.Message = "folder already exists, replace declined"
 			batch.Applied = append(batch.Applied, entry)
 			batch.FailedCount++
 			continue
 		}
-		installed, err := catalog.Apply(context.Background(), cat, e.install.AddonsPath, u, cat.Backups, s.log)
+		installed, err := catalog.Apply(context.Background(), cat, addonsDir, u, cat.Backups, s.log)
 		if err != nil {
 			entry.Message = err.Error()
 			entry.Error = err.Error()
@@ -949,7 +1105,7 @@ func (s *Service) ApplyAllUpdates(allowReplace bool) (ApplyBatch, error) {
 		batch.Applied = append(batch.Applied, entry)
 		batch.AppliedCount++
 	}
-	return batch, nil
+	return batch
 }
 
 // SearchCatalog queries every enabled provider with the same query
@@ -1054,4 +1210,209 @@ func (s *Service) RestoreAddon(folder string, allowReplace bool) (InstallResult,
 		}, nil
 	}
 	return s.installSource(e, entry.Source, allowReplace)
+}
+
+// Collections lists every collection with its addon count and marks
+// the configured one active. The active id comes from the saved
+// config, not from the on-disk folder state.
+func (s *Service) Collections() (CollectionsResult, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return CollectionsResult{}, err
+	}
+	m, err := s.profilesFor(e)
+	if err != nil {
+		return CollectionsResult{}, err
+	}
+	cols, err := m.List()
+	if err != nil {
+		return CollectionsResult{}, err
+	}
+	out := CollectionsResult{
+		Collections: []CollectionInfo{},
+		ActiveID:    e.cfg.Collection,
+	}
+	for _, c := range cols {
+		out.Collections = append(out.Collections, CollectionInfo{
+			ID:         c.ID,
+			Name:       c.Name,
+			AddonCount: len(c.Addons),
+			Active:     c.ID == e.cfg.Collection,
+		})
+	}
+	return out, nil
+}
+
+// CreateCollection snapshots the current on-disk addon state into a
+// new collection. The collection is not activated; the frontend
+// decides whether to switch to it.
+func (s *Service) CreateCollection(name string) (CollectionInfo, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return CollectionInfo{}, err
+	}
+	m, err := s.profilesFor(e)
+	if err != nil {
+		return CollectionInfo{}, err
+	}
+	c, err := m.Create(name)
+	if err != nil {
+		return CollectionInfo{}, err
+	}
+	return CollectionInfo{ID: c.ID, Name: c.Name, AddonCount: len(c.Addons)}, nil
+}
+
+// SwitchCollection applies the collection's addon state on disk and
+// persists it as the active collection. The switch renames folders
+// between "<name>" and "<name>.disabled" and is backup-snapshotted
+// when auto_backup is on; the frontend's dialog is the confirmation
+// gate. A missing collection is a Go error.
+func (s *Service) SwitchCollection(id string) (SwitchResult, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return SwitchResult{}, err
+	}
+	m, err := s.profilesFor(e)
+	if err != nil {
+		return SwitchResult{}, err
+	}
+	applied, err := m.SwitchTo(id)
+	if err != nil {
+		return SwitchResult{}, err
+	}
+	name := id
+	if c, err := m.Get(id); err == nil {
+		name = c.Name
+	}
+	if e.cfg.Collection != id {
+		e.cfg.Collection = id
+		if err := s.store.Save(e.cfg); err != nil {
+			return SwitchResult{}, err
+		}
+	}
+	return SwitchResult{
+		Applied: applied,
+		Message: fmt.Sprintf("Switched to collection %q (%d addon(s) applied)", name, len(applied)),
+	}, nil
+}
+
+// DeleteCollection removes a collection. Installed addons are
+// untouched; the active collection id is cleared from the saved
+// config when the deleted collection was active.
+func (s *Service) DeleteCollection(id string) error {
+	e, err := s.requireInstall()
+	if err != nil {
+		return err
+	}
+	m, err := s.profilesFor(e)
+	if err != nil {
+		return err
+	}
+	if err := m.Delete(id); err != nil {
+		return err
+	}
+	if e.cfg.Collection == id {
+		e.cfg.Collection = ""
+		if err := s.store.Save(e.cfg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CollectionDetail loads one collection's full addon state table.
+func (s *Service) CollectionDetail(id string) (CollectionDetail, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return CollectionDetail{}, err
+	}
+	m, err := s.profilesFor(e)
+	if err != nil {
+		return CollectionDetail{}, err
+	}
+	c, err := m.Get(id)
+	if err != nil {
+		return CollectionDetail{}, err
+	}
+	out := CollectionDetail{ID: c.ID, Name: c.Name}
+	out.Addons = make([]CollectionAddon, 0, len(c.Addons))
+	for _, a := range c.Addons {
+		out.Addons = append(out.Addons, CollectionAddon{Folder: a.Folder, Enabled: a.Enabled})
+	}
+	return out, nil
+}
+
+// SetCollectionAddon toggles one addon's desired state in a
+// collection. Unknown folders are appended.
+func (s *Service) SetCollectionAddon(id, folder string, enabled bool) error {
+	e, err := s.requireInstall()
+	if err != nil {
+		return err
+	}
+	m, err := s.profilesFor(e)
+	if err != nil {
+		return err
+	}
+	return m.SetEnabled(id, folder, enabled)
+}
+
+// InstallsStatus reports every detected installation with live scan
+// stats and average addon health. Every install is inspected, not
+// just the active one; a failed scan for one install keeps exists
+// true and zeroes its counts instead of failing the whole call.
+func (s *Service) InstallsStatus() (InstallsStatusResult, error) {
+	installs, err := detector.AutoDetect(context.Background())
+	if err != nil {
+		return InstallsStatusResult{}, err
+	}
+	out := InstallsStatusResult{Installs: []InstallStatus{}}
+	for i := range installs {
+		profile := models.ProfileByID(installs[i].ProfileID)
+		if profile == nil {
+			profile = models.DefaultProfile()
+		}
+		out.Installs = append(out.Installs, s.statusForInstall(&installs[i], profile))
+	}
+	return out, nil
+}
+
+// SyncUpdatesToAll applies every pending update to every detected
+// install with an existing AddOns directory, sharing one per-user
+// catalog registry while snapshotting each install separately. A
+// failing install lands in its row's errors with zero counts and
+// never aborts the remaining installs. No installs yields an empty
+// result with a nil error.
+func (s *Service) SyncUpdatesToAll(allowReplace bool) (SyncResult, error) {
+	installs, err := detector.AutoDetect(context.Background())
+	if err != nil {
+		return SyncResult{}, err
+	}
+	e, err := s.env()
+	if err != nil {
+		return SyncResult{}, err
+	}
+	return s.syncInstalls(e, installs, allowReplace), nil
+}
+
+// syncInstalls runs the shared cross-install update body against an
+// explicit install list (the tests inject one; SyncUpdatesToAll
+// passes AutoDetect's results).
+func (s *Service) syncInstalls(e *env, installs []detector.Installation, allowReplace bool) SyncResult {
+	out := SyncResult{Installs: []SyncInstallResult{}}
+	for _, inst := range installs {
+		if !inst.Exists() {
+			continue
+		}
+		batch := s.applyAllIn(e, inst.AddonsPath, allowReplace)
+		row := SyncInstallResult{
+			Root:    inst.Root,
+			Updated: batch.AppliedCount,
+			Failed:  batch.FailedCount,
+			Errors:  batch.errors,
+		}
+		out.Installs = append(out.Installs, row)
+		out.TotalUpdated += row.Updated
+		out.TotalFailed += row.Failed
+	}
+	return out
 }
