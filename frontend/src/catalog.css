@@ -32,14 +32,14 @@
   max-width: 560px;
   padding: 3px 4px 3px 0;
   background: var(--surface-1);
-  border: 1px solid var(--hairline-strong);
+  border: 1px solid var(--border-field);
   border-radius: var(--r-pill);
   transition:
     border-color 0.15s ease,
     box-shadow 0.15s ease;
 }
 .install-bar:focus-within {
-  border-color: transparent;
+  border-color: var(--accent);
   box-shadow: var(--ring-focus);
 }
 .install-bar-icon {
@@ -64,9 +64,10 @@
   letter-spacing: var(--body-sm-ls);
 }
 .install-bar-input::placeholder {
-  color: var(--ink-faint);
+  color: var(--ink-disabled);
 }
-.install-bar-input:focus {
+.install-bar-input:focus,
+.install-bar-input:focus-visible {
   outline: none;
 }
 
@@ -546,7 +547,7 @@
   max-width: 340px;
   height: 34px;
   padding: 0 12px;
-  border: 1px solid var(--hairline-strong);
+  border: 1px solid var(--border-field);
   border-radius: var(--r-md);
   background: var(--surface-1);
   color: var(--ink);
@@ -558,11 +559,12 @@
     box-shadow 0.15s ease;
 }
 .collections-create-input::placeholder {
-  color: var(--ink-faint);
+  color: var(--ink-disabled);
 }
-.collections-create-input:focus {
+.collections-create-input:focus,
+.collections-create-input:focus-visible {
   outline: none;
-  border-color: transparent;
+  border-color: var(--accent);
   box-shadow: var(--ring-focus);
 }
 

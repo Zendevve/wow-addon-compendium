@@ -8,6 +8,7 @@
   display: grid;
   grid-template-rows: 56px 44px minmax(0, 1fr) 26px;
   height: 100vh;
+  min-width: 0; /* let header/tabbar shrink below their content width at narrow windows */
 }
 .app.no-tabs {
   grid-template-rows: 56px 0 minmax(0, 1fr) 26px;
@@ -23,6 +24,7 @@
   align-items: center;
   gap: 16px;
   padding: 0 16px;
+  min-width: 0; /* grid item must be allowed to shrink at narrow windows */
   background: var(--canvas);
   border-bottom: 1px solid var(--hairline-soft);
 }
@@ -31,7 +33,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  min-width: 0;
+  flex: none; /* brand never squeezes; the center chip absorbs shrinkage */
 }
 .brand-mark {
   display: inline-flex;
@@ -50,7 +52,7 @@
 }
 
 .header-center {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
   display: flex;
   justify-content: center;
@@ -60,6 +62,9 @@
   align-items: center;
   gap: 7px;
   max-width: 560px;
+  min-width: 0; /* shrink below the path's natural width… */
+  flex: 0 1 auto;
+  overflow: hidden; /* …so .path-chip-value ellipsizes instead of pushing actions out */
   min-height: 28px;
   padding: 4px 12px;
   border-radius: var(--r-pill);
@@ -86,6 +91,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: none; /* Scan / Fix All must stay fully visible at min window width */
 }
 
 /* ---------- tab bar ---------- */

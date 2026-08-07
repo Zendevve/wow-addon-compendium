@@ -27,7 +27,7 @@ export function mountInstalls(
 
   const load = async (): Promise<void> => {
     loading = true;
-    render();
+    rerender();
     try {
       status = await service.InstallsStatus();
     } catch (err) {
@@ -38,8 +38,51 @@ export function mountInstalls(
       });
     } finally {
       loading = false;
-      render();
+      rerender();
     }
+  };
+
+  // --- focus preservation ------------------------------------------------
+  // Re-renders rebuild the view DOM, dropping keyboard focus to <body>.
+  // Capture the focused control before a re-render and restore focus to its
+  // replacement after. pendingFocus survives async flows (update all /
+  // activate) whose final re-render happens after the backend call, while
+  // the control is disabled.
+  let pendingFocus: string | null = null;
+
+  const focusKeyOf = (el: HTMLElement): string | null => {
+    if (el.closest("[data-refresh]")) return "refresh";
+    if (el.closest("[data-update-all]")) return "update-all";
+    const active = el.closest<HTMLElement>("[data-active]");
+    if (active) return `active:${active.dataset.active}`;
+    const scan = el.closest<HTMLElement>("[data-scan]");
+    if (scan) return `scan:${scan.dataset.scan}`;
+    return null;
+  };
+
+  const restoreFocus = (key: string | null): boolean => {
+    if (!key) return false;
+    const [kind, id] = key.split(":");
+    let target: HTMLElement | null = null;
+    if (kind === "refresh") target = el.querySelector<HTMLElement>("[data-refresh]");
+    else if (kind === "update-all") target = el.querySelector<HTMLElement>("[data-update-all]");
+    else if (kind === "active") target = el.querySelector<HTMLElement>(`[data-active="${id}"]`);
+    else if (kind === "scan") target = el.querySelector<HTMLElement>(`[data-scan="${id}"]`);
+    if (!target) return false;
+    if (target.hasAttribute("disabled")) return false;
+    target.focus();
+    return true;
+  };
+
+  // Render with focus preservation; in-flight work keeps pendingFocus alive
+  // so the final render can land it on the (re-enabled) control.
+  const rerender = (): void => {
+    const active = document.activeElement;
+    const key = pendingFocus ?? (active instanceof HTMLElement ? focusKeyOf(active) : null);
+    render();
+    if (!key) return;
+    if (restoreFocus(key)) pendingFocus = null;
+    else if (!syncing && activating === null) pendingFocus = null;
   };
 
   const updateAll = async (): Promise<void> => {
@@ -54,7 +97,7 @@ export function mountInstalls(
     if (!confirmed) return;
     syncing = true;
     syncResult = null;
-    render();
+    rerender();
     try {
       const res = await service.SyncUpdatesToAll(confirmed);
       syncResult = res;
@@ -89,7 +132,7 @@ export function mountInstalls(
   const activate = async (inst: InstallStatus): Promise<void> => {
     if (activating) return;
     activating = inst.root;
-    render();
+    rerender();
     try {
       await actions.completeSetup(
         inst.root,
@@ -104,7 +147,7 @@ export function mountInstalls(
         message: errText(err),
       });
       activating = null;
-      render();
+      rerender();
     }
   };
 
@@ -151,15 +194,24 @@ export function mountInstalls(
       </div>`;
 
     el.querySelector("[data-refresh]")?.addEventListener("click", () => void load());
-    el.querySelector("[data-update-all]")?.addEventListener("click", () => void updateAll());
+    el.querySelector("[data-update-all]")?.addEventListener("click", () => {
+      pendingFocus = "update-all";
+      void updateAll();
+    });
     el.querySelector("[data-go-setup]")?.addEventListener("click", () => actions.go("setup"));
     el.querySelectorAll<HTMLElement>("[data-active]").forEach((btn) => {
       const inst = installs[Number(btn.dataset.active)];
-      btn.addEventListener("click", () => void activate(inst));
+      btn.addEventListener("click", () => {
+        pendingFocus = `active:${btn.dataset.active}`;
+        void activate(inst);
+      });
     });
     el.querySelectorAll<HTMLElement>("[data-scan]").forEach((btn) => {
       const inst = installs[Number(btn.dataset.scan)];
-      btn.addEventListener("click", () => void activate(inst));
+      btn.addEventListener("click", () => {
+        pendingFocus = `scan:${btn.dataset.scan}`;
+        void activate(inst);
+      });
     });
   };
 
@@ -264,7 +316,7 @@ export function mountInstalls(
   void load();
 
   return {
-    refresh: render,
+    refresh: rerender,
   };
 }
 

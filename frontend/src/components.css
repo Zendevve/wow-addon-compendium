@@ -154,7 +154,7 @@
   flex: 1;
   min-width: 0;
   padding: 10px 14px;
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--border-field);
   border-radius: var(--r-md);
   background: var(--surface-1);
   color: var(--ink);
@@ -165,11 +165,13 @@
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .input::placeholder {
-  color: var(--ink-faint);
+  color: var(--ink-disabled);
 }
-.input:focus {
+/* Focus keeps a visible accent boundary + strong ring (never a bare hairline). */
+.input:focus,
+.input:focus-visible {
   outline: none;
-  border-color: transparent;
+  border-color: var(--accent);
   box-shadow: var(--ring-focus);
 }
 .input-row .input {
@@ -201,7 +203,7 @@
   width: 100%;
   min-width: 0;
   padding: 10px 36px 10px 14px;
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--border-field);
   border-radius: var(--r-md);
   background: var(--surface-1);
   color: var(--ink);
@@ -212,9 +214,10 @@
   cursor: pointer;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.select:focus {
+.select:focus,
+.select:focus-visible {
   outline: none;
-  border-color: transparent;
+  border-color: var(--accent);
   box-shadow: var(--ring-focus);
 }
 .select-small {
@@ -487,21 +490,33 @@
 
 /* ============ switch ============ */
 
+/* Hit area is 24px tall (WCAG 2.5.8); the visual track is drawn by ::before
+   at ~19px so the switch looks unchanged. The knob re-centers on the 24px box. */
 .switch {
   position: relative;
   width: 34px;
-  height: 19px;
+  height: 24px;
   flex: none;
   padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.switch::before {
+  content: "";
+  position: absolute;
+  top: 2.5px;
+  left: 0;
+  right: 0;
+  bottom: 2.5px;
   border: 1px solid var(--hairline);
   border-radius: var(--r-pill);
   background: var(--surface-2);
-  cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 .switch-knob {
   position: absolute;
-  top: 2px;
+  top: calc(50% - 6.5px);
   left: 2px;
   width: 13px;
   height: 13px;
@@ -510,7 +525,7 @@
   transition: transform 0.15s ease, background-color 0.15s ease;
 }
 /* On = selection state, accent allowed. */
-.switch.on {
+.switch.on::before {
   background: var(--accent-dim);
   border-color: var(--accent);
 }
@@ -521,6 +536,10 @@
 .switch:disabled {
   opacity: 0.5;
   cursor: default;
+}
+.switch:focus-visible {
+  outline: none;
+  box-shadow: var(--ring-focus);
 }
 
 /* ============ tables ============ */

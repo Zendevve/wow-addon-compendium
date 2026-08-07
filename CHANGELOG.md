@@ -15,7 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `@fontsource`. `frontend/src/style.css` is a module entry importing
   tokens/base/components/shell/setup/scan/lists/catalog, and gradient
   spotlight cards anchor the setup brand panel and the catalog's curated
-  band.
+
+### Fixed
+
+- **UX audit fix pass** — modal focus containment + restore + cancel-first on danger dialogs; focus retention across re-renders; visible input focus rings (WCAG 2.4.7/2.4.11); readable metadata text (ink-faint promoted, WCAG 1.4.3); visible form boundaries (1.4.11); ≥24px targets (2.5.8); header no longer clips at min window; addon rows fixed ARIA (4.1.2); aria-busy on loading regions; catalog search clear button + install-bar Escape; mock updates seed.
 
 ## [2.1.0] - 2026-08-07
 

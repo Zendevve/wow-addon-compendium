@@ -32,7 +32,7 @@ export function mountCollections(
 
   const load = async (): Promise<void> => {
     loading = true;
-    render();
+    rerender();
     try {
       result = await service.Collections();
     } catch (err) {
@@ -43,14 +43,72 @@ export function mountCollections(
       });
     } finally {
       loading = false;
-      render();
+      rerender();
     }
+  };
+
+  // --- focus preservation ------------------------------------------------
+  // Re-renders rebuild the view DOM, dropping keyboard focus to <body>.
+  // Capture the focused control before a re-render and restore focus to its
+  // replacement after. pendingFocus survives async flows (switch / delete /
+  // toggle) whose final re-render happens after the backend call, while the
+  // control is disabled.
+  let pendingFocus: string | null = null;
+
+  const focusKeyOf = (el: HTMLElement): string | null => {
+    if (el.closest("[data-new]")) return "new";
+    if (el.closest("[data-refresh]")) return "refresh";
+    const sw = el.closest<HTMLElement>("[data-switch]");
+    if (sw) return `switch:${sw.dataset.switch}`;
+    const ex = el.closest<HTMLElement>("[data-expand]");
+    if (ex) return `expand:${ex.dataset.expand}`;
+    const del = el.closest<HTMLElement>("[data-delete]");
+    if (del) return `delete:${del.dataset.delete}`;
+    const tg = el.closest<HTMLElement>("[data-toggle]");
+    if (tg) return `toggle:${tg.dataset.col}:${tg.dataset.folder}`;
+    if (el.closest("[data-name]")) return "name";
+    if (el.closest("[data-create]")) return "create";
+    if (el.closest("[data-cancel-create]")) return "cancel-create";
+    return null;
+  };
+
+  const restoreFocus = (key: string | null): boolean => {
+    if (!key) return false;
+    const [kind, ...rest] = key.split(":");
+    let target: HTMLElement | null = null;
+    if (kind === "new") target = el.querySelector<HTMLElement>("[data-new]");
+    else if (kind === "refresh") target = el.querySelector<HTMLElement>("[data-refresh]");
+    else if (kind === "switch") target = el.querySelector<HTMLElement>(`[data-switch="${rest[0]}"]`);
+    else if (kind === "expand") target = el.querySelector<HTMLElement>(`[data-expand="${rest[0]}"]`);
+    else if (kind === "delete") target = el.querySelector<HTMLElement>(`[data-delete="${rest[0]}"]`);
+    else if (kind === "toggle")
+      target = el.querySelector<HTMLElement>(
+        `[data-toggle][data-col="${rest[0]}"][data-folder="${rest[1]}"]`,
+      );
+    else if (kind === "name") target = el.querySelector<HTMLElement>("[data-name]");
+    else if (kind === "create") target = el.querySelector<HTMLElement>("[data-create]");
+    else if (kind === "cancel-create") target = el.querySelector<HTMLElement>("[data-new]");
+    if (!target) return false;
+    if (target.hasAttribute("disabled")) return false;
+    target.focus();
+    return true;
+  };
+
+  // Render with focus preservation; in-flight work keeps pendingFocus alive
+  // so the final render can land it on the (re-enabled) control.
+  const rerender = (): void => {
+    const active = document.activeElement;
+    const key = pendingFocus ?? (active instanceof HTMLElement ? focusKeyOf(active) : null);
+    render();
+    if (!key) return;
+    if (restoreFocus(key)) pendingFocus = null;
+    else if (!switching && !deleting && !busyCreate && toggling === null) pendingFocus = null;
   };
 
   const create = async (name: string): Promise<void> => {
     if (busyCreate) return;
     busyCreate = true;
-    render();
+    rerender();
     try {
       const c = await service.CreateCollection(name);
       creating = false;
@@ -64,7 +122,7 @@ export function mountCollections(
       });
     } finally {
       busyCreate = false;
-      render();
+      rerender();
     }
   };
 
@@ -80,7 +138,7 @@ export function mountCollections(
     });
     if (!confirmed) return;
     switching = true;
-    render();
+    rerender();
     try {
       const res = await service.SwitchCollection(id);
       toast({
@@ -97,7 +155,7 @@ export function mountCollections(
       });
     } finally {
       switching = false;
-      render();
+      rerender();
     }
   };
 
@@ -114,7 +172,7 @@ export function mountCollections(
     });
     if (!confirmed) return;
     deleting = true;
-    render();
+    rerender();
     try {
       await service.DeleteCollection(id);
       expanded.delete(id);
@@ -129,7 +187,7 @@ export function mountCollections(
       });
     } finally {
       deleting = false;
-      render();
+      rerender();
     }
   };
 
@@ -140,7 +198,7 @@ export function mountCollections(
       .CollectionDetail(id)
       .then((d) => {
         details.set(id, d);
-        render();
+        rerender();
       })
       .catch((err) => {
         details.delete(id);
@@ -150,7 +208,7 @@ export function mountCollections(
           title: "Could not load collection",
           message: errText(err),
         });
-        render();
+        rerender();
       });
   };
 
@@ -161,7 +219,7 @@ export function mountCollections(
   ): Promise<void> => {
     if (toggling) return;
     toggling = folder;
-    render();
+    rerender();
     try {
       await service.SetCollectionAddon(id, folder, !enabled);
       details.set(id, await service.CollectionDetail(id));
@@ -178,7 +236,7 @@ export function mountCollections(
       });
     } finally {
       toggling = null;
-      render();
+      rerender();
     }
   };
 
@@ -235,13 +293,13 @@ export function mountCollections(
 
     el.querySelector("[data-new]")?.addEventListener("click", () => {
       creating = !creating;
-      render();
+      rerender();
       if (creating) el.querySelector<HTMLInputElement>("[data-name]")?.focus();
     });
     el.querySelector("[data-refresh]")?.addEventListener("click", () => void load());
     el.querySelector("[data-cancel-create]")?.addEventListener("click", () => {
       creating = false;
-      render();
+      rerender();
     });
     el.querySelector("[data-create]")?.addEventListener("click", () => {
       const name = el.querySelector<HTMLInputElement>("[data-name]")?.value.trim() ?? "";
@@ -254,12 +312,15 @@ export function mountCollections(
         if (name) void create(name);
       } else if (e.key === "Escape") {
         creating = false;
-        render();
+        rerender();
       }
     });
     el.querySelectorAll<HTMLElement>("[data-switch]").forEach((btn) => {
       const c = cols[Number(btn.dataset.switch)];
-      btn.addEventListener("click", () => void switchTo(c.id));
+      btn.addEventListener("click", () => {
+        pendingFocus = `switch:${btn.dataset.switch}`;
+        void switchTo(c.id);
+      });
     });
     el.querySelectorAll<HTMLElement>("[data-expand]").forEach((btn) => {
       const c = cols[Number(btn.dataset.expand)];
@@ -269,19 +330,25 @@ export function mountCollections(
           expanded.add(c.id);
           ensureDetail(c.id);
         }
-        render();
+        rerender();
       });
     });
     el.querySelectorAll<HTMLElement>("[data-delete]").forEach((btn) => {
       const c = cols[Number(btn.dataset.delete)];
-      btn.addEventListener("click", () => void remove(c.id));
+      btn.addEventListener("click", () => {
+        pendingFocus = `delete:${btn.dataset.delete}`;
+        void remove(c.id);
+      });
     });
     el.querySelectorAll<HTMLElement>("[data-toggle]").forEach((btn) => {
       const colId = btn.dataset.col ?? "";
       const folder = btn.dataset.folder ?? "";
       const a = details.get(colId)?.addons.find((x) => x.folder === folder);
       if (!a) return;
-      btn.addEventListener("click", () => void toggleAddon(colId, folder, a.enabled));
+      btn.addEventListener("click", () => {
+        pendingFocus = `toggle:${colId}:${folder}`;
+        void toggleAddon(colId, folder, a.enabled);
+      });
     });
   };
 
@@ -362,7 +429,7 @@ export function mountCollections(
   void load();
 
   return {
-    refresh: render,
+    refresh: rerender,
   };
 }
 

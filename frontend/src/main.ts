@@ -37,7 +37,7 @@ appEl.innerHTML = `
     <header class="header" id="header"></header>
     <nav class="tabbar" id="tabbar" aria-label="Views"></nav>
     <main class="main"><div class="main-inner" id="content"></div></main>
-    <footer class="statusbar" id="statusbar"></footer>
+    <footer class="statusbar" id="statusbar" aria-live="polite"></footer>
   </div>`;
 
 const header = appEl.querySelector<HTMLElement>("#header")!;
@@ -404,9 +404,6 @@ function renderHeader(): void {
         `<option value="${p.id}" ${p.id === app.state.profile_id ? "selected" : ""}>${escapeHtml(p.name)}</option>`,
     )
     .join("");
-  const fixableCount = app.scan
-    ? app.scan.addons.filter((a) => a.fixable).length
-    : 0;
 
   header.innerHTML = `
     <div class="header-left">
@@ -438,10 +435,6 @@ function renderHeader(): void {
           ? `<button class="btn btn-outline" data-scan ${busy ? "disabled" : ""}>
               ${app.busy === "scan" ? `<span class="spinner"></span>` : icon("refresh", 16)}
               <span>${app.busy === "scan" ? "Scanning…" : "Scan"}</span>
-            </button>
-            <button class="btn btn-primary" data-fixall ${busy || fixableCount === 0 ? "disabled" : ""}>
-              ${app.busy === "fixall" ? `<span class="spinner"></span>` : icon("wrench", 16)}
-              <span>${app.busy === "fixall" ? "Fixing…" : `Fix All${fixableCount ? ` (${fixableCount})` : ""}`}</span>
             </button>`
           : ""
       }
@@ -451,7 +444,6 @@ function renderHeader(): void {
     void actions.setProfile((e.target as HTMLSelectElement).value);
   });
   header.querySelector("[data-scan]")?.addEventListener("click", () => void actions.scan());
-  header.querySelector("[data-fixall]")?.addEventListener("click", () => void actions.fixAll());
   header.querySelector("[data-setup-link]")?.addEventListener("click", () => actions.go("setup"));
 }
 
@@ -522,6 +514,9 @@ function syncChrome(): void {
   renderHeader();
   renderTabs();
   renderStatus();
+  // Announce view-region busy state to assistive tech: true while any
+  // backend operation is running, false again once idle.
+  content.setAttribute("aria-busy", app.busy !== null ? "true" : "false");
 }
 
 function mountView(): void {

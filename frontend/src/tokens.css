@@ -13,7 +13,7 @@
    --border-strong → --hairline-strong
    --text-1      → --ink
    --text-2      → --ink-muted
-   --text-3      → --ink-faint
+   --text-3      → --ink-faint (#7f7f7f, readable) or --ink-disabled (placeholders/disabled)
    --accent      → --accent        (repointed to #0099ff)
    --accent-strong → --accent-strong
    --accent-dim  → --accent-dim
@@ -35,11 +35,15 @@
   --hairline: rgba(255, 255, 255, 0.08);
   --hairline-strong: rgba(255, 255, 255, 0.14);
   --hairline-soft: rgba(255, 255, 255, 0.055);
+  --border-field: rgba(255, 255, 255, 0.25); /* resting form-field boundary: #505050 over
+                                                --surface-1 = 2.25:1 (visible, WCAG 1.4.11 floor) */
 
   /* ---- text: binary hierarchy ink / ink-muted ---- */
   --ink: #f7f7f6;
   --ink-muted: #999999;
-  --ink-faint: rgba(153, 153, 153, 0.55); /* placeholders + disabled ONLY */
+  --ink-faint: #7f7f7f;              /* informational text (metadata, versions, kickers):
+                                        4.52:1 on --surface-1, 4.92:1 on --canvas (WCAG 4.5:1) */
+  --ink-disabled: rgba(153, 153, 153, 0.55); /* placeholders + disabled controls ONLY */
 
   /* ---- accent: links, focus rings, selection states ONLY ---- */
   --accent: #0099ff;
@@ -81,6 +85,7 @@
   /* ---- elevation ---- */
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.45);
   --shadow-2: 0 10px 30px rgba(0, 0, 0, 0.25), inset 0 0.5px 0 rgba(255, 255, 255, 0.10); /* floating cards: light edge + drop */
-  --ring-focus: 0 0 0 1px rgba(0, 153, 255, 0.15), 0 0 0 4px rgba(0, 153, 255, 0.06);
+  /* focus ring: 2px solid accent (6.04:1 vs --surface-1, ≥3:1 WCAG 1.4.11) + soft halo */
+  --ring-focus: 0 0 0 2px var(--accent), 0 0 0 4px rgba(0, 153, 255, 0.35);
   --ring-selected: 0 0 0 1px rgba(0, 153, 255, 0.15);
 }

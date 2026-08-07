@@ -92,11 +92,11 @@ export function mountCatalog(
     query = q;
     if (!q.trim()) {
       result = null;
-      render();
+      rerender();
       return;
     }
     searching = true;
-    render();
+    rerender();
     try {
       result = await service.SearchCatalog(q);
     } catch (err) {
@@ -104,8 +104,75 @@ export function mountCatalog(
       result = { results: [], errors: [errText(err)] };
     } finally {
       searching = false;
-      render();
+      rerender();
     }
+  };
+
+  // --- focus preservation ------------------------------------------------
+  // Re-renders rebuild the view DOM, dropping keyboard focus to <body>.
+  // Capture the focused control before a re-render and restore focus to its
+  // replacement after. pendingFocus survives async flows (install / save)
+  // whose final re-render happens after the backend call, while the control
+  // is disabled.
+  let pendingFocus: string | null = null;
+
+  const focusKeyOf = (el: HTMLElement): string | null => {
+    if (el.closest(".search-clear") || el.closest("[data-search]")) return "search";
+    if (el.closest("[data-source]")) return "source";
+    const filter = el.closest<HTMLElement>("[data-filter]");
+    if (filter) return `filter:${filter.dataset.filter}`;
+    if (el.closest("[data-compat-toggle]")) return "compat";
+    const install = el.closest<HTMLElement>("[data-install-row]");
+    if (install) return `install:${install.dataset.installRow}`;
+    const save = el.closest<HTMLElement>("[data-save-import]");
+    if (save) return `save:${save.dataset.saveImport}`;
+    const curated = el.closest<HTMLElement>("[data-curated-install]");
+    if (curated) return `curated:${curated.dataset.curatedInstall}`;
+    if (el.closest("[data-rescan]")) return "rescan";
+    if (el.closest("[data-install]")) return "install";
+    return null;
+  };
+
+  const restoreFocus = (key: string | null): boolean => {
+    if (!key) return false;
+    let target: HTMLElement | null = null;
+    if (key === "search") {
+      const input = el.querySelector<HTMLInputElement>("[data-search]");
+      if (input) {
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+        return true;
+      }
+      return false;
+    }
+    if (key === "source") {
+      target = el.querySelector<HTMLInputElement>("[data-source]");
+    } else if (key === "install") {
+      target = el.querySelector<HTMLElement>("[data-install]");
+    } else {
+      const [kind, id] = key.split(":");
+      if (kind === "filter") target = el.querySelector<HTMLElement>(`[data-filter="${id}"]`);
+      else if (kind === "compat") target = el.querySelector<HTMLElement>("[data-compat-toggle]");
+      else if (kind === "install") target = el.querySelector<HTMLElement>(`[data-install-row="${id}"]`);
+      else if (kind === "save") target = el.querySelector<HTMLElement>(`[data-save-import="${id}"]`);
+      else if (kind === "curated") target = el.querySelector<HTMLElement>(`[data-curated-install="${id}"]`);
+      else if (kind === "rescan") target = el.querySelector<HTMLElement>("[data-rescan]");
+    }
+    if (!target) return false;
+    if (target.hasAttribute("disabled")) return false;
+    target.focus();
+    return true;
+  };
+
+  // Render with focus preservation: capture what had focus, render, restore.
+  // In-flight work keeps pendingFocus alive so the final render can land it.
+  const rerender = (): void => {
+    const active = document.activeElement;
+    const key = pendingFocus ?? (active instanceof HTMLElement ? focusKeyOf(active) : null);
+    render();
+    if (!key) return;
+    if (restoreFocus(key)) pendingFocus = null;
+    else if (!searching && !installing && !saving) pendingFocus = null;
   };
 
   const scheduleSearch = (): void => {
@@ -123,7 +190,7 @@ export function mountCatalog(
     });
     if (!confirmed) return;
     installing = true;
-    render();
+    rerender();
     try {
       const res = await service.InstallSource(source, true);
       installResult = res;
@@ -156,14 +223,14 @@ export function mountCatalog(
       toast({ type: "error", title: "Install failed", message: errText(err) });
     } finally {
       installing = false;
-      render();
+      rerender();
     }
   };
 
   const saveImport = async (entry: CatalogEntry): Promise<void> => {
     if (saving) return;
     saving = true;
-    render();
+    rerender();
     try {
       const res = await service.SaveWagoImport(entry.id);
       wagoResult = res;
@@ -172,7 +239,7 @@ export function mountCatalog(
       toast({ type: "error", title: "Save failed", message: errText(err) });
     } finally {
       saving = false;
-      render();
+      rerender();
     }
   };
 
@@ -187,7 +254,7 @@ export function mountCatalog(
         message: errText(err),
       });
     }
-    render();
+    rerender();
   };
 
   const installCurated = async (addon: CuratedAddon): Promise<void> => {
@@ -199,7 +266,7 @@ export function mountCatalog(
     });
     if (!confirmed) return;
     installing = true;
-    render();
+    rerender();
     try {
       const res = await service.InstallSource(addon.source, true);
       installResult = res;
@@ -302,6 +369,11 @@ export function mountCatalog(
             <span class="search-icon">${icon("search", 16)}</span>
             <input class="search-input" type="text" placeholder="Search addons by name, author or summary…" spellcheck="false"
               value="${escapeAttr(query)}" aria-label="Search addon catalog" data-search />
+            ${
+              query
+                ? `<button class="search-clear" aria-label="Clear search">${icon("x", 14)}</button>`
+                : ""
+            }
           </div>
           <div class="install-bar">
             <span class="install-bar-icon">${icon("download", 16)}</span>
@@ -424,10 +496,7 @@ export function mountCatalog(
     searchInput.addEventListener("input", () => {
       query = searchInput.value;
       scheduleSearch();
-      render();
-      const next = el.querySelector<HTMLInputElement>("[data-search]")!;
-      next.focus();
-      next.setSelectionRange(next.value.length, next.value.length);
+      rerender();
     });
     searchInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
@@ -439,14 +508,22 @@ export function mountCatalog(
         query = "";
         window.clearTimeout(timer);
         result = null;
-        render();
-        el.querySelector<HTMLInputElement>("[data-search]")!.focus();
+        rerender();
       }
+    });
+    el.querySelector(".search-clear")?.addEventListener("click", () => {
+      query = "";
+      window.clearTimeout(timer);
+      result = null;
+      rerender();
     });
     sourceInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
         submitSource();
+      }
+      if (e.key === "Escape" && sourceInput.value) {
+        sourceInput.value = "";
       }
     });
     el.querySelector("[data-install]")?.addEventListener("click", submitSource);
@@ -456,25 +533,34 @@ export function mountCatalog(
     el.querySelectorAll<HTMLElement>("[data-filter]").forEach((chip) => {
       chip.addEventListener("click", () => {
         provider = (chip.dataset.filter as "all" | Provider) ?? "all";
-        render();
+        rerender();
       });
     });
     el.querySelectorAll<HTMLElement>("[data-install-row]").forEach((btn) => {
       const entry = filtered[Number(btn.dataset.installRow)];
-      btn.addEventListener("click", () => void installSource(entry.id, entry.name));
+      btn.addEventListener("click", () => {
+        pendingFocus = `install:${btn.dataset.installRow}`;
+        void installSource(entry.id, entry.name);
+      });
     });
     el.querySelectorAll<HTMLElement>("[data-save-import]").forEach((btn) => {
       const entry = filtered[Number(btn.dataset.saveImport)];
-      btn.addEventListener("click", () => void saveImport(entry));
+      btn.addEventListener("click", () => {
+        pendingFocus = `save:${btn.dataset.saveImport}`;
+        void saveImport(entry);
+      });
     });
     el.querySelector("[data-compat-toggle]")?.addEventListener("click", () => {
       compatOnly = !compatOnly;
-      render();
+      rerender();
     });
     el.querySelectorAll<HTMLElement>("[data-curated-install]").forEach((btn) => {
       const addon = curated?.addons[Number(btn.dataset.curatedInstall)];
       if (!addon) return;
-      btn.addEventListener("click", () => void installCurated(addon));
+      btn.addEventListener("click", () => {
+        pendingFocus = `curated:${btn.dataset.curatedInstall}`;
+        void installCurated(addon);
+      });
     });
     el.querySelector("[data-go-setup]")?.addEventListener("click", () => actions.go("setup"));
 
@@ -515,7 +601,6 @@ export function mountCatalog(
 
   render();
   void loadCurated();
-  window.setTimeout(() => el.querySelector<HTMLInputElement>("[data-search]")?.focus(), 0);
 
   return {
     refresh: () => {

@@ -41,15 +41,67 @@ export function mountUpdates(
 
   const check = async (): Promise<void> => {
     checking = true;
-    render();
+    rerender();
     try {
       result = await service.CheckUpdates();
     } catch (err) {
       toast({ type: "error", title: "Check failed", message: errText(err) });
     } finally {
       checking = false;
-      render();
+      rerender();
     }
+  };
+
+  // --- focus preservation ------------------------------------------------
+  // Re-renders rebuild the view DOM, dropping keyboard focus to <body>.
+  // Capture the focused control before a re-render and restore focus to its
+  // replacement after. pendingFocus survives async flows (apply / pin /
+  // ignore / rollback) whose final re-render happens after the backend call,
+  // while the control is disabled.
+  let pendingFocus: string | null = null;
+
+  const focusKeyOf = (el: HTMLElement): string | null => {
+    if (el.closest("[data-check]")) return "check";
+    if (el.closest("[data-apply-all]")) return "apply-all";
+    const one = el.closest<HTMLElement>("[data-apply-one]");
+    if (one) return `apply-one:${one.dataset.applyOne}`;
+    const filter = el.closest<HTMLElement>("[data-managed-filter]");
+    if (filter) return `managed-filter:${filter.dataset.managedFilter}`;
+    const pin = el.closest<HTMLElement>("[data-managed-pin]");
+    if (pin) return `managed-pin:${pin.dataset.managedPin}`;
+    const ignore = el.closest<HTMLElement>("[data-managed-ignore]");
+    if (ignore) return `managed-ignore:${ignore.dataset.managedIgnore}`;
+    const rollback = el.closest<HTMLElement>("[data-managed-rollback]");
+    if (rollback) return `managed-rollback:${rollback.dataset.managedRollback}`;
+    return null;
+  };
+
+  const restoreFocus = (key: string | null): boolean => {
+    if (!key) return false;
+    const [kind, id] = key.split(":");
+    let target: HTMLElement | null = null;
+    if (kind === "check") target = el.querySelector<HTMLElement>("[data-check]");
+    else if (kind === "apply-all") target = el.querySelector<HTMLElement>("[data-apply-all]");
+    else if (kind === "apply-one") target = el.querySelector<HTMLElement>(`[data-apply-one="${id}"]`);
+    else if (kind === "managed-filter") target = el.querySelector<HTMLElement>(`[data-managed-filter="${id}"]`);
+    else if (kind === "managed-pin") target = el.querySelector<HTMLElement>(`[data-managed-pin="${id}"]`);
+    else if (kind === "managed-ignore") target = el.querySelector<HTMLElement>(`[data-managed-ignore="${id}"]`);
+    else if (kind === "managed-rollback") target = el.querySelector<HTMLElement>(`[data-managed-rollback="${id}"]`);
+    if (!target) return false;
+    if (target.hasAttribute("disabled")) return false;
+    target.focus();
+    return true;
+  };
+
+  // Render with focus preservation; in-flight work keeps pendingFocus alive
+  // so the final render can land it on the (re-enabled) control.
+  const rerender = (): void => {
+    const active = document.activeElement;
+    const key = pendingFocus ?? (active instanceof HTMLElement ? focusKeyOf(active) : null);
+    render();
+    if (!key) return;
+    if (restoreFocus(key)) pendingFocus = null;
+    else if (!checking && applying === null && mutating === null) pendingFocus = null;
   };
 
   const loadTracked = async (): Promise<void> => {
@@ -60,7 +112,7 @@ export function mountUpdates(
     } catch (err) {
       trackedErr = errText(err, "Could not load tracked addons");
     }
-    render();
+    rerender();
   };
 
   const reloadAll = async (): Promise<void> => {
@@ -70,7 +122,7 @@ export function mountUpdates(
   const setPinned = async (a: TrackedAddon, pinned: boolean): Promise<void> => {
     if (mutating) return;
     mutating = a.folder;
-    render();
+    rerender();
     try {
       await service.SetAddonPinned(a.folder, pinned);
       toast({
@@ -91,7 +143,7 @@ export function mountUpdates(
   const setIgnored = async (a: TrackedAddon, ignored: boolean): Promise<void> => {
     if (mutating) return;
     mutating = a.folder;
-    render();
+    rerender();
     try {
       await service.SetAddonIgnored(a.folder, ignored);
       toast({
@@ -119,7 +171,7 @@ export function mountUpdates(
     });
     if (!confirmed) return;
     mutating = a.folder;
-    render();
+    rerender();
     try {
       const res = await service.RollbackAddon(a.folder);
       toast({
@@ -167,7 +219,7 @@ export function mountUpdates(
       if (!confirmed) return;
     }
     applying = u.folder;
-    render();
+    rerender();
     try {
       const res = await service.ApplyUpdate(u.folder, true);
       recordBatch(res);
@@ -196,7 +248,7 @@ export function mountUpdates(
       if (!confirmed) return;
     }
     applying = "all";
-    render();
+    rerender();
     try {
       const res = await service.ApplyAllUpdates(true);
       recordBatch(res);
@@ -287,30 +339,48 @@ export function mountUpdates(
         ${managedSectionHtml(managedAll, managedVisible, managedPinned, managedIgnored)}
       </div>`;
 
-    el.querySelector("[data-check]")?.addEventListener("click", () => void check());
-    el.querySelector("[data-apply-all]")?.addEventListener("click", () => void applyAll());
+    el.querySelector("[data-check]")?.addEventListener("click", () => {
+      pendingFocus = "check";
+      void check();
+    });
+    el.querySelector("[data-apply-all]")?.addEventListener("click", () => {
+      pendingFocus = "apply-all";
+      void applyAll();
+    });
     el.querySelector("[data-go-setup]")?.addEventListener("click", () => actions.go("setup"));
     el.querySelectorAll<HTMLElement>("[data-apply-one]").forEach((btn) => {
       const u = updates[Number(btn.dataset.applyOne)];
-      btn.addEventListener("click", () => void applyOne(u));
+      btn.addEventListener("click", () => {
+        pendingFocus = `apply-one:${btn.dataset.applyOne}`;
+        void applyOne(u);
+      });
     });
     el.querySelectorAll<HTMLElement>("[data-managed-filter]").forEach((chip) => {
       chip.addEventListener("click", () => {
         managedFilter = (chip.dataset.managedFilter ?? "all") as ManagedFilter;
-        render();
+        rerender();
       });
     });
     el.querySelectorAll<HTMLElement>("[data-managed-pin]").forEach((btn) => {
       const t = managedVisible[Number(btn.dataset.managedPin)];
-      btn.addEventListener("click", () => void setPinned(t, !t.pinned));
+      btn.addEventListener("click", () => {
+        pendingFocus = `managed-pin:${btn.dataset.managedPin}`;
+        void setPinned(t, !t.pinned);
+      });
     });
     el.querySelectorAll<HTMLElement>("[data-managed-ignore]").forEach((btn) => {
       const t = managedVisible[Number(btn.dataset.managedIgnore)];
-      btn.addEventListener("click", () => void setIgnored(t, !t.ignored));
+      btn.addEventListener("click", () => {
+        pendingFocus = `managed-ignore:${btn.dataset.managedIgnore}`;
+        void setIgnored(t, !t.ignored);
+      });
     });
     el.querySelectorAll<HTMLElement>("[data-managed-rollback]").forEach((btn) => {
       const t = managedVisible[Number(btn.dataset.managedRollback)];
-      btn.addEventListener("click", () => void rollback(t));
+      btn.addEventListener("click", () => {
+        pendingFocus = `managed-rollback:${btn.dataset.managedRollback}`;
+        void rollback(t);
+      });
     });
   };
 

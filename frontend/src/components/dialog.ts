@@ -23,6 +23,10 @@ export function confirmDialog(opts: ConfirmOpts): Promise<boolean> {
   const { promise, resolve } = Promise.withResolvers<boolean>();
   root.replaceChildren();
 
+  // Element that opened the dialog; focus returns to it when the dialog
+  // closes so keyboard users stay anchored to the control they activated.
+  const trigger = document.activeElement as HTMLElement | null;
+
   const backdrop = document.createElement("div");
   backdrop.className = "dialog-backdrop";
   const dialog = document.createElement("div");
@@ -66,12 +70,46 @@ export function confirmDialog(opts: ConfirmOpts): Promise<boolean> {
     if (settled) return;
     settled = true;
     document.removeEventListener("keydown", onKey);
-    resolve(value);
     backdrop.remove();
+    // Focus goes back to whatever opened the dialog (after the backdrop is
+    // gone so the restored element is not covered). Only restore when the
+    // element is still connected.
+    if (trigger && trigger.isConnected) trigger.focus();
+    resolve(value);
   };
 
   function onKey(e: KeyboardEvent): void {
-    if (e.key === "Escape") done(false);
+    if (e.key === "Escape") {
+      done(false);
+      return;
+    }
+    if (e.key === "Tab") {
+      // Focus trap: keep Tab / Shift+Tab cycling inside the dialog so
+      // keyboard users cannot reach the page behind the modal.
+      const focusables = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((el) => !el.hasAttribute("disabled"));
+      if (focusables.length === 0) {
+        e.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey) {
+        if (active === first || !(active instanceof Node && dialog.contains(active))) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !(active instanceof Node && dialog.contains(active))) {
+        e.preventDefault();
+        first.focus();
+      }
+      return;
+    }
     if (e.key === "Enter") {
       const t = e.target as HTMLElement;
       // Enter from a form field is a submit keystroke for that field, not a
@@ -93,7 +131,10 @@ export function confirmDialog(opts: ConfirmOpts): Promise<boolean> {
   dialog.querySelector("[data-confirm]")!.addEventListener("click", () => done(true));
   document.addEventListener("keydown", onKey);
   window.setTimeout(() => {
-    (dialog.querySelector("[data-confirm]") as HTMLButtonElement | null)?.focus();
+    // Destructive dialogs start on Cancel so an Enter keystroke can never
+    // fire the dangerous action by accident; safe dialogs start on Confirm.
+    const target = opts.danger ? "[data-cancel]" : "[data-confirm]";
+    (dialog.querySelector<HTMLButtonElement>(target))?.focus();
   }, 0);
 
   return promise;

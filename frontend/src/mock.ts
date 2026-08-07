@@ -769,7 +769,7 @@ function freshDB(): MockDB {
     lastInstall: null,
     tracked: TRACKED_UPDATES.map((u) => ({ ...u })),
     trackedState: {
-      Questie: { pinned: true, ignored: false },
+      Questie: { pinned: false, ignored: false },
       DeadlyBossMods: { pinned: false, ignored: true },
       WeakAuras: { pinned: false, ignored: false },
     },

@@ -60,6 +60,73 @@ export function mountScan(
     return Math.round(sum / addons.length);
   };
 
+  // --- focus preservation ------------------------------------------------
+  // Re-renders rebuild the list/toolbar DOM, which drops keyboard focus to
+  // <body>. Capture the focused control before a re-render and restore focus
+  // to its replacement after, so keyboard users stay anchored. pendingFocus
+  // survives async action flows (fix / restore / Fix All) whose re-render
+  // happens after the backend call, while the control is disabled.
+  let pendingFocus: string | null = null;
+
+  const focusKeyOf = (el: HTMLElement): string | null => {
+    if (el.closest(".search-input")) return "search";
+    const row = el.closest<HTMLElement>("[data-row]");
+    if (row) {
+      const ctrl = el.closest<HTMLElement>(
+        "[data-expand], [data-fix], [data-restore]",
+      );
+      const kind = ctrl
+        ? ctrl.hasAttribute("data-expand")
+          ? "expand"
+          : ctrl.hasAttribute("data-fix")
+            ? "fix"
+            : "restore"
+        : "row";
+      return `row:${row.dataset.row}:${kind}`;
+    }
+    const chip = el.closest<HTMLElement>("[data-health]");
+    if (chip) return `chip:${chip.dataset.health}`;
+    if (el.closest("[data-panel-fixall]")) return "panel-fixall";
+    if (el.closest("[data-rescan]")) return "rescan";
+    return null;
+  };
+
+  const restoreFocus = (key: string | null): boolean => {
+    if (!key) return false;
+    let target: HTMLElement | null = null;
+    if (key === "search") {
+      const input = toolbar.querySelector<HTMLInputElement>(".search-input");
+      if (input) {
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+        return true;
+      }
+      return false;
+    }
+    const [kind, ...rest] = key.split(":");
+    if (kind === "row") {
+      const [, id, ctrl] = rest;
+      const sel =
+        ctrl === "expand"
+          ? `[data-row="${id}"] [data-expand]`
+          : ctrl === "fix"
+            ? `[data-row="${id}"] [data-fix]`
+            : ctrl === "restore"
+              ? `[data-row="${id}"] [data-restore]`
+              : `[data-row="${id}"]`;
+      target = list.querySelector<HTMLElement>(sel);
+    } else if (kind === "chip") {
+      target = list.querySelector<HTMLElement>(`[data-health="${rest[0]}"]`);
+    } else if (kind === "panel-fixall") {
+      target = list.querySelector<HTMLElement>("[data-panel-fixall]");
+    } else if (kind === "rescan") {
+      target = list.querySelector<HTMLElement>("[data-rescan]");
+    }
+    if (!target) return false;
+    target.focus();
+    return true;
+  };
+
   const renderToolbar = (): void => {
     const scan = app.scan;
     const filterActive = app.filter.length > 0;
@@ -250,7 +317,10 @@ export function mountScan(
       ${hasAddons ? (allHealthy ? renderAllHealthy() : renderPanel()) : ""}
       <div class="addon-rows">${rows}</div>`;
 
-    list.querySelector("[data-rescan]")?.addEventListener("click", () => actions.scan());
+    list.querySelector("[data-rescan]")?.addEventListener("click", () => {
+      pendingFocus = "rescan";
+      actions.scan();
+    });
     list.querySelector("[data-clear-filter]")?.addEventListener("click", () => {
       app.filter = "";
       renderToolbar();
@@ -260,29 +330,36 @@ export function mountScan(
     list.querySelector("[data-clear-health]")?.addEventListener("click", () => {
       healthFilter = "all";
       renderList();
+      list.querySelector<HTMLElement>('[data-health="all"]')?.focus();
     });
-    list.querySelector("[data-panel-fixall]")?.addEventListener("click", () => void actions.fixAll());
+    list.querySelector("[data-panel-fixall]")?.addEventListener("click", () => {
+      pendingFocus = "panel-fixall";
+      void actions.fixAll();
+    });
     list.querySelectorAll<HTMLElement>("[data-health]").forEach((chip) => {
       chip.addEventListener("click", () => {
         healthFilter = (chip.dataset.health ?? "all") as HealthFilter;
         renderList();
+        list.querySelector<HTMLElement>(`[data-health="${healthFilter}"]`)?.focus();
       });
     });
 
     list.querySelectorAll<HTMLElement>("[data-row]").forEach((row) => {
       const addon = filtered[Number(row.dataset.row)];
-      row.addEventListener("click", () => toggle(addon.folder_name));
-      row.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          toggle(addon.folder_name);
-        }
+      row.addEventListener("click", () => {
+        toggle(addon.folder_name);
+        // Mouse click on the row: land focus on the rebuilt expand control
+        // so it does not drop to <body> after the re-render.
+        list.querySelector<HTMLElement>(
+          `[data-row="${row.dataset.row}"] [data-expand]`,
+        )?.focus();
       });
     });
     list.querySelectorAll<HTMLElement>("[data-fix]").forEach((btn) => {
       const addon = filtered[Number(btn.dataset.fix)];
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
+        pendingFocus = focusKeyOf(btn);
         actions.fixOne(addon);
       });
     });
@@ -290,6 +367,7 @@ export function mountScan(
       const addon = filtered[Number(btn.dataset.restore)];
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
+        pendingFocus = focusKeyOf(btn);
         void (async () => {
           const confirmed = await confirmDialog({
             title: `Restore ${addon.folder_name}?`,
@@ -360,12 +438,17 @@ export function mountScan(
         : "";
     const more = a.issues.length > 1 ? `<span class="addon-more">+${a.issues.length - 1} more</span>` : "";
 
-    const detail = isOpen ? renderDetail(a) : "";
+    const detail = isOpen ? renderDetail(a, i) : "";
 
     return `
-      <div class="addon-row status-${a.status}${isOpen ? " expanded" : ""}" role="button" tabindex="0"
-        data-row="${i}" aria-expanded="${isOpen}" aria-label="${escapeAttr(a.folder_name)}: ${a.status}">
+      <div class="addon-row status-${a.status}${isOpen ? " expanded" : ""}" data-row="${i}" role="group"
+        aria-label="${escapeAttr(a.folder_name)}: ${a.status}">
         <span class="addon-status-cell">
+          <button class="addon-expand" data-expand="${i}" aria-expanded="${isOpen}"
+            aria-controls="addon-detail-${i}"
+            aria-label="${isOpen ? "Collapse" : "Expand"} ${escapeAttr(a.folder_name)} details">
+            ${icon(isOpen ? "chevron-down" : "chevron-right", 14)}
+          </button>
           <span class="addon-status status-${a.status}">${icon(glyph, 18)}</span>
           <span class="health-badge ${badgeClass}" title="Health ${a.health}/100">${a.health}</span>
         </span>
@@ -388,7 +471,7 @@ export function mountScan(
       ${detail}`;
   };
 
-  const renderDetail = (a: Addon): string => {
+  const renderDetail = (a: Addon, i: number): string => {
     const issuesHtml = a.issues.length
       ? `<section class="detail-section">
           <h3 class="detail-title">Issues (${a.issues.length})</h3>
@@ -419,7 +502,7 @@ export function mountScan(
       ? `<p class="path-line mono">${escapeHtml(a.toc.title)} — ${escapeHtml(a.toc.name)}.toc</p>`
       : "";
     const path = app.scan ? `${app.scan.addons_dir}\\${a.folder_name}` : a.folder_name;
-    return `<div class="addon-detail">
+    return `<div class="addon-detail" id="addon-detail-${i}">
       ${issuesHtml}
       ${compatHtml}
       ${tocHtml}
@@ -453,12 +536,20 @@ export function mountScan(
   if (!app.scan && app.state.has_install && !app.busy) {
     void actions.scan();
   }
-  window.setTimeout(() => toolbar.querySelector<HTMLInputElement>(".search-input")?.focus(), 0);
 
   return {
     refresh: () => {
+      // Restore focus to the control the user last activated (async flows
+      // re-render after the backend call); fall back to whatever currently
+      // holds focus. Give up when the target is gone while idle.
+      const active = document.activeElement;
+      const key =
+        pendingFocus ?? (active instanceof HTMLElement ? focusKeyOf(active) : null);
       renderToolbar();
       renderList();
+      if (!key) return;
+      if (restoreFocus(key)) pendingFocus = null;
+      else if (!app.busy) pendingFocus = null;
     },
   };
 }
