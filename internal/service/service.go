@@ -28,6 +28,7 @@ import (
 	"github.com/wowfix/wowfix/internal/models"
 	"github.com/wowfix/wowfix/internal/profiles"
 	"github.com/wowfix/wowfix/internal/scanner"
+	"github.com/wowfix/wowfix/internal/utils"
 	"github.com/wowfix/wowfix/internal/validator"
 )
 
@@ -46,6 +47,10 @@ type Service struct {
 	// enabledProviders selects the catalog providers; nil enables all.
 	// Tests enable only the provider they mock.
 	enabledProviders map[string]bool
+	// wagoDirOverride pins where Wago imports are saved; empty uses the
+	// user Downloads folder (or the config directory). Tests set it to
+	// a temp dir.
+	wagoDirOverride string
 }
 
 // New returns a Service backed by store. A nil store falls back to the
@@ -509,6 +514,15 @@ type InstallResult struct {
 	Replaced  []string `json:"replaced"`
 	Skipped   []string `json:"skipped"`
 	Errors    []string `json:"errors"`
+}
+
+// WagoImportResult is the outcome of saving a WeakAuras/Plater import
+// string from the Wago provider to disk.
+type WagoImportResult struct {
+	Path        string `json:"path"`
+	Name        string `json:"name"`
+	Bytes       int    `json:"bytes"`
+	AppliedHint string `json:"applied_hint"`
 }
 
 // UpdateInfo is one pending addon update.
@@ -1357,6 +1371,105 @@ func (s *Service) installSource(e *env, source string, allowReplace bool) (Insta
 		Skipped:   []string{},
 		Errors:    []string{},
 	}, nil
+}
+
+// SaveWagoImport downloads one Wago import (its 8-character slug) as
+// the raw encoded import string and saves it to a WagoImports folder
+// under the user Downloads directory (falling back to the config
+// directory when Downloads is unavailable). The file is NOT an addon
+// archive: it must be imported in-game (WeakAuras / Plater import
+// panel), which the returned AppliedHint spells out.
+func (s *Service) SaveWagoImport(id string) (WagoImportResult, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return WagoImportResult{}, err
+	}
+	if strings.TrimSpace(id) == "" {
+		return WagoImportResult{}, fmt.Errorf("missing wago import id")
+	}
+	cat, err := s.catalogFor(e)
+	if err != nil {
+		return WagoImportResult{}, err
+	}
+	prov, ok := cat.Provider(catalog.ProviderWago)
+	if !ok {
+		return WagoImportResult{}, fmt.Errorf("wago provider is not enabled")
+	}
+	ctx := context.Background()
+	addon, err := prov.Resolve(ctx, id)
+	if err != nil {
+		return WagoImportResult{}, err
+	}
+	base := sanitizeImportName(addon.Name)
+	dir := s.wagoDir(e)
+	dest := filepath.Join(dir, base+".txt")
+	for n := 2; utils.Exists(dest); n++ {
+		dest = filepath.Join(dir, fmt.Sprintf("%s-%d.txt", base, n))
+	}
+	if err := prov.Download(ctx, addon, dest, nil); err != nil {
+		return WagoImportResult{}, fmt.Errorf("wago: %w", err)
+	}
+	info, err := os.Stat(dest)
+	if err != nil {
+		return WagoImportResult{}, err
+	}
+	return WagoImportResult{
+		Path:        dest,
+		Name:        addon.Name,
+		Bytes:       int(info.Size()),
+		AppliedHint: fmt.Sprintf("Saved to %s — import it in-game via WeakAuras → Import", dest),
+	}, nil
+}
+
+// wagoDir returns the folder Wago imports are saved to: the user
+// Downloads directory when present, else the config directory. The
+// WagoImports subfolder is always ensured (a failure surfaces later as
+// a Download error).
+func (s *Service) wagoDir(e *env) string {
+	dir := s.wagoDirOverride
+	if dir == "" {
+		// The Downloads folder is <home>/Downloads on every supported
+		// platform; there is no stdlib helper for it. Stat it so a
+		// missing (or redirected) folder falls back to the config dir.
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			dl := filepath.Join(home, "Downloads")
+			if info, err := os.Stat(dl); err == nil && info.IsDir() {
+				dir = dl
+			}
+		}
+	}
+	if dir == "" {
+		dir = e.store.Dir()
+	}
+	imports := filepath.Join(dir, "WagoImports")
+	_ = utils.EnsureDir(imports)
+	return imports
+}
+
+// sanitizeImportName reduces an addon name to filesystem-safe
+// characters ([A-Za-z0-9._-]), collapsing runs of anything else to a
+// single underscore. An empty result becomes "import".
+func sanitizeImportName(name string) string {
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+			lastUnderscore = false
+		default:
+			if !lastUnderscore {
+				b.WriteByte('_')
+				lastUnderscore = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "_")
+	if out == "" {
+		out = "import"
+	}
+	return out
 }
 
 // RestoreAddon re-downloads a tracked addon from the provider source

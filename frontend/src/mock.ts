@@ -30,6 +30,7 @@ import type {
   CatalogEntry,
   CheckUpdatesResult,
   SearchCatalogResult,
+  WagoImportResult,
   CollectionsResult,
   CollectionInfo,
   CollectionDetail,
@@ -322,6 +323,26 @@ const CATALOG_POOL: CatalogEntry[] = [
     game_version: "retail",
     id: "elvui",
     homepage: "https://www.tukui.org/addons.php?id=elvui",
+  },
+  {
+    provider: "wago",
+    name: "Luxthos WeakAuras Suite",
+    author: "Luxthos",
+    summary: "WEAKAURA suite: class rotation, cooldown and utility auras with full customization.",
+    latest_version: "3.4.2",
+    game_version: "",
+    id: "pvBs8htuW",
+    homepage: "https://wago.io/pvBs8htuW",
+  },
+  {
+    provider: "wago",
+    name: "Jundies - Midnight M+ and Raid Plater",
+    author: "Jundies",
+    summary: "PLATER profile: nameplate styling, buff/debuff tracking and M+ affix bars.",
+    latest_version: "3.2.0",
+    game_version: "",
+    id: "ak3iS95aa",
+    homepage: "https://wago.io/ak3iS95aa",
   },
 ];
 
@@ -1071,6 +1092,19 @@ export function createMockService(): Service {
         return { installed: [folder], replaced: [], skipped: [], errors: [] };
       }
       return { installed: [], replaced: [folder], skipped: [], errors: [] };
+    },
+
+    async SaveWagoImport(id: string): Promise<WagoImportResult> {
+      await delay(700);
+      const entry = CATALOG_POOL.find((c) => c.id.toLowerCase() === id.toLowerCase());
+      const name = entry?.name ?? "import";
+      const path = `C:\\Users\\mock\\Downloads\\WagoImports\\${name}.txt`;
+      return {
+        path,
+        name,
+        bytes: 2100,
+        applied_hint: `Saved to ${path} — import it in-game via WeakAuras → Import`,
+      };
     },
 
     async RestoreAddon(folder: string, allowReplace: boolean): Promise<InstallSourceResult> {

@@ -142,7 +142,7 @@ export interface InstallResult {
 }
 
 /** Addon update sources (used for provider chips/badges). */
-export type Provider = "github" | "curseforge" | "wowinterface" | "tukui";
+export type Provider = "github" | "curseforge" | "wowinterface" | "tukui" | "wago";
 
 export interface UpdateEntry {
   folder: string;
@@ -221,6 +221,14 @@ export interface InstallSourceResult {
   replaced: string[];
   skipped: string[];
   errors: string[];
+}
+
+/** Outcome of saving a WeakAuras/Plater import string from Wago. */
+export interface WagoImportResult {
+  path: string;
+  name: string;
+  bytes: number;
+  applied_hint: string;
 }
 
 // ---------- collections (addon loadouts) ----------
@@ -308,6 +316,7 @@ export interface Service {
   RollbackAddon(folder: string): Promise<RollbackResult>;
   SearchCatalog(query: string): Promise<SearchCatalogResult>;
   InstallSource(source: string, allowReplace: boolean): Promise<InstallSourceResult>;
+  SaveWagoImport(id: string): Promise<WagoImportResult>;
   RestoreAddon(folder: string, allowReplace: boolean): Promise<InstallSourceResult>;
   Collections(): Promise<CollectionsResult>;
   CreateCollection(name: string): Promise<CollectionInfo>;

@@ -1548,3 +1548,170 @@ func TestCheckSnapshotBadJSON(t *testing.T) {
 		t.Error("bad snapshot JSON should error")
 	}
 }
+
+// Wago fixtures mirror internal/catalog/wago_test.go: the check body
+// for the resolved import and the raw encoded import string the
+// encoded endpoint serves.
+const wagoCheckFixture = `[
+	{
+		"_id": "pvBs8htuW",
+		"name": "Sea Swell - CountDown Move Bar",
+		"username": "DoGGyFromPlanetWoof",
+		"game": "tww",
+		"type": "WEAKAURA",
+		"version": 2,
+		"versionString": "1.0.1",
+		"url": "https://wago.io/pvBs8htuW",
+		"modified": "2024-11-14T09:30:00Z"
+	}
+]`
+
+const wagoImportString = "!DEvBZjUnq4FnDM(LJy78YLPFdsGEmdbsrox6DdJ5ewcqnglxj582hUF7D3vYyt6LRmntgW6flT7ZUpp7swCwAgBxgtKXSzSKEXX9ofhbZQY1LlTkHmJnz4iycH0YD1gUtMTkJLR1fc9tLPYNDdl5RkKISbWzPfYILpNnncor5UhLMmwCVOEXzmNAN0WuVkZME6fWQoE(d2R0fAdCDtJP)tOppL(8m8txg7jLWTfggbhP2OKLoUtPlZyFA28XFD200(tGtRIBEyqHSuCJgn5(xFn4cLoPPKx8zPXIVX0y0ma"
+
+// mockWagoServer serves the data.wago.io endpoints the way the real
+// API does: the check body for /api/check and a 302-then-body for the
+// encoded endpoint. Traffic reaches it through wagoRewriteTransport,
+// mirroring the mockGitHub pattern.
+func mockWagoServer(t *testing.T) *http.Client {
+	t.Helper()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/check/":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(wagoCheckFixture))
+		case "/api/raw/encoded":
+			if r.URL.Query().Get("version") == "" {
+				http.Redirect(w, r, "/api/raw/encoded?id="+r.URL.Query().Get("id")+"&version=1.0.1", http.StatusFound)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain")
+			w.Write([]byte(wagoImportString))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(ts.Close)
+	return &http.Client{
+		Transport: &wagoRewriteTransport{mock: strings.TrimPrefix(ts.URL, "http://"), base: ts.Client().Transport},
+	}
+}
+
+// wagoRewriteTransport redirects data.wago.io traffic to a mock server
+// so the real Wago API is never touched.
+type wagoRewriteTransport struct {
+	mock string // mock origin "host:port"
+	base http.RoundTripper
+}
+
+func (t *wagoRewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Host != "data.wago.io" {
+		return nil, fmt.Errorf("test transport refuses non-wago host %s", req.URL.Host)
+	}
+	r := req.Clone(req.Context())
+	u := *req.URL
+	u.Scheme = "http"
+	u.Host = t.mock
+	r.URL = &u
+	return t.base.RoundTrip(r)
+}
+
+// newTestWagoService wires a Service to a fake install, an isolated
+// registry, a wago-only catalog whose traffic hits a mock
+// data.wago.io server and a temp wagoDir override.
+func newTestWagoService(t *testing.T) *Service {
+	t.Helper()
+	root := t.TempDir()
+	addonsDir := filepath.Join(root, "Interface", "AddOns")
+	writeFixture(t, addonsDir)
+
+	store := config.NewStoreAt(filepath.Join(t.TempDir(), "config.json"))
+	cfg := config.Default()
+	cfg.WoWPath = root
+	cfg.Flavor = ""
+	if err := store.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	s := New(store)
+	s.registryPath = filepath.Join(t.TempDir(), "registry.json")
+	s.enabledProviders = map[string]bool{catalog.ProviderWago: true}
+	s.wagoDirOverride = t.TempDir()
+	s.httpClient = mockWagoServer(t)
+	return s
+}
+
+// TestSaveWagoImport downloads an import string through the wago
+// provider into the WagoImports folder and checks the file content,
+// the sanitized file name and the DTO fields.
+func TestSaveWagoImport(t *testing.T) {
+	s := newTestWagoService(t)
+	res, err := s.SaveWagoImport("pvBs8htuW")
+	if err != nil {
+		t.Fatalf("SaveWagoImport: %v", err)
+	}
+	wantPath := filepath.Join(s.wagoDirOverride, "WagoImports", "Sea_Swell_-_CountDown_Move_Bar.txt")
+	if res.Path != wantPath {
+		t.Errorf("path = %q, want %q", res.Path, wantPath)
+	}
+	if res.Name != "Sea Swell - CountDown Move Bar" {
+		t.Errorf("name = %q", res.Name)
+	}
+	data, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("import file not written: %v", err)
+	}
+	if string(data) != wagoImportString {
+		t.Errorf("file holds %d bytes, want the raw import string", len(data))
+	}
+	if res.Bytes != len(wagoImportString) {
+		t.Errorf("bytes = %d, want %d", res.Bytes, len(wagoImportString))
+	}
+	if !strings.Contains(res.AppliedHint, wantPath) || !strings.Contains(res.AppliedHint, "WeakAuras → Import") {
+		t.Errorf("applied_hint = %q", res.AppliedHint)
+	}
+}
+
+// TestSaveWagoImportCollision verifies the -2/-3 dedup suffix on
+// name collisions, mirroring backup naming.
+func TestSaveWagoImportCollision(t *testing.T) {
+	s := newTestWagoService(t)
+	if _, err := s.SaveWagoImport("pvBs8htuW"); err != nil {
+		t.Fatalf("first save: %v", err)
+	}
+	res, err := s.SaveWagoImport("pvBs8htuW")
+	if err != nil {
+		t.Fatalf("second save: %v", err)
+	}
+	wantPath := filepath.Join(s.wagoDirOverride, "WagoImports", "Sea_Swell_-_CountDown_Move_Bar-2.txt")
+	if res.Path != wantPath {
+		t.Errorf("path = %q, want %q", res.Path, wantPath)
+	}
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Errorf("deduped file missing: %v", err)
+	}
+}
+
+// TestSaveWagoImportProviderDisabled surfaces a disabled wago
+// provider as a clear Go error.
+func TestSaveWagoImportProviderDisabled(t *testing.T) {
+	s := newTestWagoService(t)
+	s.enabledProviders = map[string]bool{}
+	res, err := s.SaveWagoImport("pvBs8htuW")
+	if err == nil || !strings.Contains(err.Error(), "wago provider is not enabled") {
+		t.Fatalf("err = %v, want disabled-provider error", err)
+	}
+	if res != (WagoImportResult{}) {
+		t.Errorf("res = %+v, want zero value", res)
+	}
+}
+
+// TestSaveWagoImportEmptyID requires a non-empty id before any
+// network traffic.
+func TestSaveWagoImportEmptyID(t *testing.T) {
+	s := newTestWagoService(t)
+	if _, err := s.SaveWagoImport(""); err == nil || !strings.Contains(err.Error(), "missing wago import id") {
+		t.Fatalf("empty id err = %v, want clear error", err)
+	}
+	if _, err := s.SaveWagoImport("   "); err == nil {
+		t.Fatal("whitespace id should error")
+	}
+}

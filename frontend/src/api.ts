@@ -153,6 +153,7 @@ export const service: Service = {
   SearchCatalog: (query) => call("SearchCatalog", query),
   InstallSource: (source, allowReplace) =>
     call("InstallSource", source, allowReplace),
+  SaveWagoImport: (id) => call("SaveWagoImport", id),
   RestoreAddon: (folder, allowReplace) =>
     call("RestoreAddon", folder, allowReplace),
   Collections: () => call("Collections"),

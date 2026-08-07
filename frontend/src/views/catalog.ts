@@ -8,8 +8,10 @@ import type {
   CatalogEntry,
   SearchCatalogResult,
   InstallSourceResult,
+  WagoImportResult,
   Provider,
 } from "../types";
+import { formatBytes } from "../types";
 import { icon, type IconName } from "../icons";
 import { service } from "../api";
 import { toast } from "../components/toast";
@@ -20,6 +22,7 @@ const PROVIDER_LABEL: Record<string, string> = {
   curseforge: "CurseForge",
   wowinterface: "WowInterface",
   tukui: "Tukui",
+  wago: "Wago",
 };
 
 const FILTERS: { value: "all" | Provider; label: string }[] = [
@@ -28,6 +31,7 @@ const FILTERS: { value: "all" | Provider; label: string }[] = [
   { value: "curseforge", label: "CurseForge" },
   { value: "wowinterface", label: "WowInterface" },
   { value: "tukui", label: "Tukui" },
+  { value: "wago", label: "Wago" },
 ];
 
 const DEBOUNCE_MS = 350;
@@ -42,7 +46,9 @@ export function mountCatalog(
   let result: SearchCatalogResult | null = null;
   let searching = false;
   let installing = false;
+  let saving = false;
   let installResult: InstallSourceResult | null = null;
+  let wagoResult: WagoImportResult | null = null;
   let timer = 0;
 
   const doSearch = async (q: string): Promise<void> => {
@@ -113,6 +119,22 @@ export function mountCatalog(
       toast({ type: "error", title: "Install failed", message: errText(err) });
     } finally {
       installing = false;
+      render();
+    }
+  };
+
+  const saveImport = async (entry: CatalogEntry): Promise<void> => {
+    if (saving) return;
+    saving = true;
+    render();
+    try {
+      const res = await service.SaveWagoImport(entry.id);
+      wagoResult = res;
+      toast({ type: "ok", title: "Import saved", message: res.applied_hint });
+    } catch (err) {
+      toast({ type: "error", title: "Save failed", message: errText(err) });
+    } finally {
+      saving = false;
       render();
     }
   };
@@ -204,6 +226,24 @@ export function mountCatalog(
         }
 
         ${
+          wagoResult
+            ? `<div class="catalog-result" role="status">
+                <div class="result-summary">
+                  <span class="result-summary-icon tile-ok">${icon("check-circle", 16)}</span>
+                  <span class="result-summary-text">
+                    <b>Import saved</b>
+                    <span class="muted">${escapeHtml(wagoResult.name)} · ${formatBytes(wagoResult.bytes)}</span>
+                  </span>
+                </div>
+                <div class="result-actions">
+                  <span class="result-hint mono">${escapeHtml(wagoResult.path)}</span>
+                  <span class="result-hint">Import it in-game via WeakAuras → Import.</span>
+                </div>
+              </div>`
+            : ""
+        }
+
+        ${
           !result
             ? emptyCard(
                 "search",
@@ -271,6 +311,10 @@ export function mountCatalog(
       const entry = filtered[Number(btn.dataset.installRow)];
       btn.addEventListener("click", () => void installSource(entry.id, entry.name));
     });
+    el.querySelectorAll<HTMLElement>("[data-save-import]").forEach((btn) => {
+      const entry = filtered[Number(btn.dataset.saveImport)];
+      btn.addEventListener("click", () => void saveImport(entry));
+    });
     el.querySelector("[data-go-setup]")?.addEventListener("click", () => actions.go("setup"));
 
     function submitSource(): void {
@@ -296,9 +340,15 @@ export function mountCatalog(
         ${providerChip(r.provider)}
       </div>
       <div class="catalog-action">
-        <button class="btn btn-primary btn-sm" data-install-row="${i}" ${installing ? "disabled" : ""}>
-          ${icon("package", 14)}<span>Install</span>
-        </button>
+        ${
+          r.provider === "wago"
+            ? `<button class="btn btn-outline btn-sm" data-save-import="${i}" ${saving ? "disabled" : ""} title="Save the import string for in-game import">
+                ${saving ? `<span class="spinner"></span>` : icon("download", 14)}<span>Save import</span>
+              </button>`
+            : `<button class="btn btn-primary btn-sm" data-install-row="${i}" ${installing ? "disabled" : ""}>
+                ${icon("package", 14)}<span>Install</span>
+              </button>`
+        }
       </div>
     </div>`;
 
