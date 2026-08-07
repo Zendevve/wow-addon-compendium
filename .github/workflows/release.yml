@@ -70,7 +70,8 @@ jobs:
         shell: pwsh
         run: |
           $env:Path = "$env:USERPROFILE\go\bin;C:\Program Files (x86)\NSIS;$env:Path"
-          wails build -nsis
+          $ver = $env:GITHUB_REF_NAME.TrimStart('v')
+          wails build -nsis -ldflags "-X main.version=$ver"
 
       - name: Publish GUI release
         uses: softprops/action-gh-release@v2

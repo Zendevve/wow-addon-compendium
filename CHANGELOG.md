@@ -6,6 +6,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-08-07
+
+### Added
+
+- **Updates view** — check for updates, dry-run update-all, per-addon
+  apply and flavor-mismatch gating.
+- **Catalog view** — five providers including WeakAuras/Wago imports and
+  paste-URL install.
+- **Collections view** — create, switch, detail and per-addon toggles.
+- **Installs view** — per-install health cards and cross-install
+  update-all.
+- **Addon Doctor** — health-score scan view with a fix-all diff toast.
+- **Managed addons** — pin/ignore/rollback for tracked addons, integrity
+  drift badges and restore-from-source.
+- **Recommended section** — curated private-server addon sets (vanilla
+  clones, ChromieCraft 3.3.5a) with a flavor-compat filter.
+- **Wago provider** — WeakAuras search and imports in the catalog; addon
+  manifest checksums.
+- **Offline catalog snapshots** — `wowfix snapshot export|check`; backup
+  per-folder rollback.
+- **CLI** — `wowfix curated list|install`.
+
+### Changed
+
+- **Go 1.25+ required (wails v2.13.0); Node.js needed to build the
+  frontend** — the CI test job now builds the frontend before vet/test
+  (embed fix) on Go 1.25.x pins.
+
 ## [2.0.0] - 2026-08-07
 
 ### Added
