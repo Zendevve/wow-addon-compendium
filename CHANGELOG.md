@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-08-07
+
+### Added
+
+- **Wails v2 desktop GUI** — a Windows desktop app (scan/fix, TOC
+  validation, ZIP install) bound to the same core packages as the CLI;
+  the Bubble Tea TUI is removed. Building now requires Go 1.25+ (wails
+  v2.13.0) and Node.js for the frontend; the GUI runs on Windows with
+  the WebView2 runtime.
+
 ### Fixed
 
 - **Manual path entry accepts `Interface\AddOns` paths** — pasting an
@@ -41,6 +51,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a per-view summary line ("N addons · K with issues · E errors"), a
   two-column help overlay and width-constrained rows in every list
   (catalog, updates, profiles, SavedVariables, logs).
+
+### Removed
+
+- Bubble Tea terminal UI (`internal/ui`) and the `preview` command; the bare
+  `wowfix` invocation now prints help and points to the desktop GUI.
 
 ## [1.0.0] - 2026-08-05
 

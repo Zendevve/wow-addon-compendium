@@ -1,0 +1,22 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "wowfix",
+  "outputfilename": "wowfix",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "assetdir": "frontend/src",
+  "author": {
+    "name": "wowfix"
+  },
+  "windows": {
+    "webview2": "embed",
+    "nsis": {
+      "installMode": "perUser",
+      "webview2": {
+        "installMode": "downloadBootstrapper"
+      }
+    }
+  }
+}

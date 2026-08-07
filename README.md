@@ -1,9 +1,10 @@
 # wowfix
 
-A cross-platform terminal utility that scans your World of Warcraft `Interface/AddOns`
-folder, finds the common addon installation problems, repairs them safely (with
-backups and trash), validates TOC compatibility, and installs addons from ZIP
-archives. One binary, no runtime dependencies.
+wowfix scans your World of Warcraft `Interface/AddOns` folder, finds the common
+addon installation problems, repairs them safely (with backups and trash),
+validates TOC compatibility and installs addons from ZIP archives. It ships as a
+Windows desktop GUI (Wails v2 + WebView2) and a cross-platform CLI — one engine,
+two front-ends.
 
 ![Go](https://img.shields.io/badge/Go-1.23+-00ADD8) ![Platform](https://img.shields.io/badge/Windows-Linux-macOS-lightgrey) ![CI](https://img.shields.io/github/actions/workflow/status/Zendevve/wow-addon-compendium/ci.yml?branch=main) ![Release](https://img.shields.io/github/v/release/Zendevve/wow-addon-compendium)
 
@@ -11,13 +12,7 @@ archives. One binary, no runtime dependencies.
 
 ## Screenshot
 
-Live demo (recorded with [VHS](https://github.com/charmbracelet/vhs)):
-
-![wowfix demo](demo.gif)
-
-The main list (live output of `wowfix preview`, which renders seven panels:
-list, catalog browser, updates, catalog detail, help, collections and
-SavedVariables):
+A text preview of the scan list, as rendered by the retired terminal UI:
 
 ```
 ── LIST ──
@@ -34,8 +29,6 @@ SavedVariables):
 │   ✔      BigWigs              —        local —                                                   │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 ```
-
-Full seven-panel preview: run `wowfix preview`.
 
 ## Features
 
@@ -57,23 +50,19 @@ Full seven-panel preview: run `wowfix preview`.
   CurseForge, WowInterface and Tukui in parallel and merges the results;
   `wowfix install <url|owner/repo>` installs straight from any provider.
 - **Update manager** — catalog installs are tracked in a registry;
-  `wowfix update` (or `u`/`U` in the TUI) checks every tracked addon
+  `wowfix update` checks every tracked addon
   against its provider and applies newer releases. Update safety:
   updates targeting a different game version are flagged (⚠) and
   skipped by default unless you confirm.
 - **Addon profiles** — capture the current addon setup as a named
   collection (PvE/PvP/Raiding/Leveling presets) and switch between
-  them; switching renames folders to `<name>.disabled` and back
-  (`o` in the TUI).
+  them; switching renames folders to `<name>.disabled` and back.
 - **SavedVariables** — back up, restore, reset and migrate between
   accounts the per-account `SavedVariables` files under
-  `WTF/Account/<account>/` (`v` in the TUI).
+  `WTF/Account/<account>/`.
 - **Import / Export** — share addon setups as a JSON or YAML manifest,
   a bundle ZIP (manifest + local addon folders + SavedVariables) or a
   GitHub repo list; importing installs through the catalog.
-- **TUI v2** — fuzzy addon filter (`/`), a help overlay (`?`), a catalog
-  browser (`c`), an updates panel (`u`/`U`), install-from-source (`i`)
-  and mouse-wheel scrolling throughout.
 - **Backups** — every mutation is preceded by a `Backups/<timestamp>/` snapshot;
   `wowfix restore` brings folders back (the current state is snapshotted first).
 - **Trash, never delete** — removals go to the OS trash (Recycle Bin on Windows,
@@ -81,23 +70,32 @@ Full seven-panel preview: run `wowfix preview`.
 - **Auto-detection** — finds WoW installs in standard locations, Battle.net/Steam
   registry keys (Windows), Wine/Lutris/Proton prefixes (Linux), Applications (macOS);
   the game version is read from the client executable's PE version resource.
-- **Logging** — every action is logged; view in the TUI (`l`) and export to text (`e`).
+- **Logging** — every action is logged in a ring buffer and exportable to text.
 - **Config** — saved in the platform user config dir; remembers the WoW path,
   flavor, profile, theme, and last scan.
 
 ## Install / Build
 
-Requires Go 1.23+.
+Requires Go 1.25+ (the desktop GUI pins wails v2.13.0, which requires
+Go 1.25). Node.js 18+ and npm are needed to build the GUI frontend.
+
+CLI (Windows/Linux/macOS):
 
 ```sh
 go build -o wowfix ./cmd/wowfix
 ```
 
+Desktop GUI (Windows, WebView2 runtime required):
+
+```sh
+wails build                         # -> build/bin/wowfix.exe
+wails build -nsis                   # + build/bin/wowfix-setup.exe installer
+```
+
 Version metadata:
 
 ```sh
-go build -ldflags "-X github.com/wowfix/wowfix/internal/ui.Version=1.0.0 \
-                   -X main.version=1.0.0 -X main.commit=$(git rev-parse --short HEAD)" \
+go build -ldflags "-X main.version=1.0.0 -X main.commit=$(git rev-parse --short HEAD)" \
   -o wowfix ./cmd/wowfix
 ```
 
@@ -111,57 +109,31 @@ GOOS=darwin  GOARCH=arm64 go build -o wowfix      ./cmd/wowfix
 
 ## Usage
 
-### Terminal UI
+### Desktop GUI
+
+The primary interface is a Windows desktop app built with
+[Wails v2](https://wails.io) on WebView2:
 
 ```sh
-wowfix
+wails build   # -> build/bin/wowfix.exe
 ```
 
-| Key             | Action                            |
-|-----------------|-----------------------------------|
-| `↑`/`↓` `k`/`j` | Navigate the addon list           |
-| mouse wheel     | Scroll the list / inspect / logs  |
-| `Enter`         | Inspect the selected addon        |
-| `Esc`           | Back to the previous view         |
-| `f`             | Fix the selected addon            |
-| `a`             | Fix all detected problems         |
-| `d`             | Move the selected folder to trash |
-| `r`             | Rescan                            |
-| `b`             | Backup all addons                 |
-| `l` / `e`       | Logs / export logs to a file      |
-| `c`             | Open the addon catalog browser    |
-| `u` / `U`       | Updates view: update selected / update all |
-| `i`             | Install an addon from a source (URL or `owner/repo`) |
-| `s`             | Switch WoW installation           |
-| `p`             | Choose game profile               |
-| `o` / `O`       | Manage addon collections (profiles) |
-| `v` / `V`       | SavedVariables (backup / reset)   |
-| `/`             | Fuzzy-filter the addon list       |
-| `?`             | Help overlay (all keybindings)    |
-| `t`             | Toggle dark/light theme           |
-| `q` / `Ctrl+C`  | Quit                              |
-
-Per-view extra keys (all views also take `Esc` to go back):
-
-- **Catalog** (`c`) — `↑`/`↓` move, `/` focus search, `S` cycle sort,
-  `W` cycle version filter, `d` open details, `Enter` install action.
-- **Catalog detail** (`d` in the catalog) — `↑`/`↓` scroll, `o` open
-  homepage, `g` open GitHub releases, `i` install, `Enter` back.
-- **Updates** (`u`) — `↑`/`↓` move, `u` update selected, `U` update all,
-  `Enter` open update details.
-- **Collections** (`o`) — `↑`/`↓` move, `Enter` switch (confirmed),
-  `n` create from the current setup, `d` duplicate, `r` rename, `x` delete.
-- **SavedVariables** (`v`) — `↑`/`↓` move, `Enter` cycle accounts,
-  `b` back up to the config dir, `r` reset the selected file (confirmed).
-
-The inspect screen shows the TOC compatibility table
-(expected vs detected interface per TOC), the issue list with suggested fixes,
-and the target folder name.
+- **Scan & fix** — the same scan/fix engine as the CLI: every addon with its
+  issues and compatibility verdict, fix one addon or all at once.
+- **Validate** — per-addon TOC compatibility table (expected vs detected
+  interface) against the active game profile.
+- **Install** — pick or drop a `.zip` archive and install it with replace
+  confirmation.
+- **Installation picker** — auto-detected WoW installs, or paste a path; the
+  chosen install and profile are remembered in the same config file the CLI
+  uses.
+- Destructive actions confirm in the UI and follow the
+  [safety model](#safety-model) below (backups first, trash, never delete).
 
 ### CLI
 
 ```
-wowfix                        launch the terminal UI
+wowfix                        show this help (the desktop GUI is the primary interface)
 wowfix scan                   scan the AddOns folder and report problems
 wowfix fix [--yes]            fix all detected problems (backups first)
 wowfix install <addon.zip>    install an addon archive [--yes]
@@ -181,7 +153,6 @@ wowfix savedvars              list/back up/restore/reset/migrate SavedVariables
 wowfix export <out.json|out.yaml|out.zip>  export a collection [--collection <id>] [--savedvars]
 wowfix import <file|url>      import a manifest (JSON/YAML), bundle zip or GitHub repo list
 wowfix version                print version
-wowfix preview                render a text preview of the TUI
 wowfix help                   show this help
 ```
 
@@ -245,9 +216,7 @@ wowfix profile switch pve --yes      # apply: renames folders, sets config colle
 wowfix profile delete pve
 ```
 
-In the TUI press `o` for the collections view: `enter` switches (with a
-confirm dialog), `n` creates from the current state, `d`/`r` duplicate
-and rename, `x` deletes. Collections live as one `<id>.json` file per
+Collections live as one `<id>.json` file per
 collection in `collections_dir` (default `<config dir>/collections`);
 ids are sanitized names, `-2`, `-3`, ... appended on collisions.
 
@@ -272,8 +241,6 @@ choice is announced. Restore refuses paths outside the WTF root, and
 reset matches the exact file stem so `DBM` never deletes `DBM-Core.lua`.
 Migration never overwrites existing destination files (they are skipped
 and reported) and requires both accounts to exist.
-In the TUI press `v`: `enter` cycles accounts, `b` backs up to the
-config dir, `r` resets the selected file (confirmed).
 
 ### Import / Export
 
@@ -320,7 +287,7 @@ addons requires the catalog (`wowfix import` wires it automatically).
 ## Safety model
 
 1. **Never overwrite without confirmation** — every rename/replace/trash/restore
-   goes through a confirmation prompt (CLI) or dialog (TUI); `--yes` opts out explicitly.
+   goes through a confirmation prompt (CLI) or a dialog in the desktop GUI; `--yes` opts out explicitly.
 2. **Always back up first** — each affected folder is copied to
    `Backups/<timestamp>/` before any change; disabled only via `auto_backup: false`.
 3. **Never delete permanently** — removal means moving to the OS trash; if no
@@ -333,7 +300,10 @@ addons requires the catalog (`wowfix import` wires it automatically).
 
 ```
 cmd/wowfix/          CLI entry point (command dispatch, JSON output)
+cmd/wowfix-gui/      desktop GUI entry point (Wails v2)
 internal/
+  service/           Wails-bound API facade (scan/fix/validate/install)
+  gui/               shared Wails application wiring (options, bindings)
   models/            shared data types: Addon, TOC, Issue, Profile
   catalog/           providers (GitHub/CurseForge/WowInterface/Tukui), registry, updater
   scanner/           detection only — never touches the filesystem
@@ -347,13 +317,12 @@ internal/
   detector/          WoW install discovery + PE version parsing
   config/            persisted user configuration
   logger/            ring-buffer logger with file sink + export
-  ui/                Bubble Tea TUI (list, inspect, logs, catalog, updates, profiles, savedvars, dialogs)
   utils/             filesystem helpers, cross-platform trash, PE parser
 ```
 
 The core packages (scanner, validator, fixer, installer, backup, catalog,
 config, profiles, savedvars, importexport) are pure business logic with
-no UI dependency — the CLI and the TUI are two thin front-ends over the
+no UI dependency — the CLI and the desktop GUI are two thin front-ends over the
 same engine, so the whole feature set is available from both.
 
 ## Testing
@@ -378,14 +347,9 @@ wowfix restore  --path testdata/wow
 ```
 
 **CI** — a GitHub Actions workflow (`.github/workflows/ci.yml`) runs
-`gofmt`, `go vet`, `go test` and `go build` on Ubuntu and Windows for every
-push/PR touching Go sources, and cross-compiles the CLI for
-linux/amd64, darwin/arm64 and windows/amd64.
-
-The animated demo in the README is driven by `demo.tape`. Re-record it
-with [VHS](https://github.com/charmbracelet/vhs) (`vhs demo.tape`); the
-tape uses an isolated config via the `APPDATA` environment variable so
-your real `wowfix` config is never touched.
+`gofmt`, `go vet`, tests and the CLI build on Ubuntu and Windows, cross-
+compiles the CLI for linux/amd64, darwin/arm64 and windows/amd64, and
+builds the Windows desktop GUI with `wails build` in a dedicated job.
 
 ## Extensibility
 

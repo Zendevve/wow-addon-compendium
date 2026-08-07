@@ -8,6 +8,9 @@ on:
       - 'go.sum'
       - '.github/**'
       - '.gitattributes'
+      - 'frontend/**'
+      - 'wails.json'
+      - 'build/**'
   pull_request:
     paths:
       - '**.go'
@@ -15,6 +18,9 @@ on:
       - 'go.sum'
       - '.github/**'
       - '.gitattributes'
+      - 'frontend/**'
+      - 'wails.json'
+      - 'build/**'
 
 jobs:
   test:
@@ -23,7 +29,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
-        go-version: ['1.24.x']
+        go-version: ['1.25.x']
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -44,14 +50,23 @@ jobs:
             exit 1
           fi
 
+      # The wails GUI packages (root main, cmd/wowfix-gui, internal/gui)
+      # are excluded here: on linux they need GTK/WebKit development
+      # headers and are built by the gui-build job (windows-latest).
       - name: Vet
-        run: go vet ./...
+        shell: bash
+        run: |
+          pkgs=$(go list ./... | grep -v -e '/cmd/wowfix-gui' -e '/internal/gui' -e '^github.com/wowfix/wowfix$')
+          go vet $pkgs
 
       - name: Test
-        run: go test ./... -count=1
+        shell: bash
+        run: |
+          pkgs=$(go list ./... | grep -v -e '/cmd/wowfix-gui' -e '/internal/gui' -e '^github.com/wowfix/wowfix$')
+          go test $pkgs -count=1
 
-      - name: Build
-        run: go build ./...
+      - name: Build (CLI only)
+        run: go build ./cmd/wowfix
 
   crosscompile:
     name: crosscompile
@@ -63,7 +78,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.24.x'
+          go-version: '1.25.x'
           cache: true
 
       - name: Cross-compile CLI
@@ -82,3 +97,46 @@ jobs:
         with:
           name: wowfix-dist
           path: dist/
+
+  gui-build:
+    name: gui-build (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.x'
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
+
+      - name: Install NSIS
+        run: choco install nsis -y
+
+      - name: Build GUI
+        shell: pwsh
+        run: |
+          $env:Path = "$env:USERPROFILE\go\bin;C:\Program Files (x86)\NSIS;$env:Path"
+          wails build -nsis
+
+      - name: Upload GUI binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: wowfix-gui
+          path: build/bin/wowfix.exe
+
+      - name: Upload GUI installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: wowfix-gui-installer
+          path: build/bin/wowfix-amd64-installer.exe
+          if-no-files-found: error

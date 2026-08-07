@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2021",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2021", "ES2024.Promise", "DOM", "DOM.Iterable"],
+    "types": [],
+    "strict": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "useDefineForClassFields": true,
+    "forceConsistentCasingInFileNames": true,
+    "noUnusedLocals": false,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src"]
+}

@@ -16,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/wowfix/wowfix/internal/backup"
 	"github.com/wowfix/wowfix/internal/catalog"
 	"github.com/wowfix/wowfix/internal/config"
@@ -27,7 +26,6 @@ import (
 	"github.com/wowfix/wowfix/internal/models"
 	"github.com/wowfix/wowfix/internal/savedvars"
 	"github.com/wowfix/wowfix/internal/scanner"
-	"github.com/wowfix/wowfix/internal/ui"
 	"github.com/wowfix/wowfix/internal/utils"
 	"github.com/wowfix/wowfix/internal/validator"
 )
@@ -50,7 +48,7 @@ var (
 const usage = `wowfix — World of Warcraft addon fixer
 
 Usage:
-  wowfix                        launch the terminal UI
+  wowfix                        show this help; the desktop GUI is the primary interface
   wowfix scan                   scan the AddOns folder and report problems
   wowfix fix                    fix all detected problems [--yes]
   wowfix install <addon.zip>    install an addon archive [--yes]
@@ -72,7 +70,6 @@ Usage:
   wowfix export <out.json|out.zip>  export a collection [--collection <id>] [--savedvars]
   wowfix import <file|url>      import a manifest, bundle zip or GitHub repo list
   wowfix version                print version
-  wowfix preview                render a text preview of the TUI (README)
   wowfix help                   show this help
 
 Flags:
@@ -121,7 +118,9 @@ func isSourceArg(s string) bool {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return runTUI()
+		fmt.Fprintln(os.Stderr, "wowfix — launch the GUI by running the wowfix desktop app; see `wowfix help` for CLI commands")
+		fmt.Fprint(os.Stderr, usage)
+		return nil
 	}
 	cmd, rest := args[0], args[1:]
 
@@ -166,8 +165,6 @@ func run(args []string) error {
 		return runExport(rest)
 	case "import":
 		return runImport(rest)
-	case "preview":
-		return runPreview()
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", cmd, usage)
 	}
@@ -1029,31 +1026,6 @@ func profileIDs() []string {
 // validateWowPath rejects paths that do not contain an AddOns directory.
 func validateWowPath(path string) error {
 	if _, err := detector.DetectPath(path); err != nil {
-		return err
-	}
-	return nil
-}
-
-func runPreview() error {
-	fmt.Print(ui.RenderPreview())
-	return nil
-}
-
-func runTUI() error {
-	store, err := config.NewStore()
-	if err != nil {
-		return err
-	}
-	cfg, err := store.Load()
-	if err != nil {
-		return err
-	}
-	log := logger.New(500)
-	defer log.Close()
-
-	app := ui.NewApp(cfg, store, log)
-	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	if _, err := p.Run(); err != nil {
 		return err
 	}
 	return nil
