@@ -47,7 +47,63 @@ function normalize(name: keyof Service, p: Promise<unknown>): Promise<unknown> {
       }
       case "DetectInstalls":
       case "Profiles":
+      case "Sources":
+      case "SavedVarsAccounts":
         return Array.isArray(raw) ? raw : [];
+      case "AddonInfo": {
+        const r = raw as Record<string, unknown>;
+        r.matches = r.matches ?? [];
+        return r;
+      }
+      case "Doctor": {
+        const r = raw as Record<string, unknown>;
+        r.checks = r.checks ?? [];
+        return r;
+      }
+      case "SavedVarsList": {
+        const r = raw as Record<string, unknown>;
+        r.files = r.files ?? [];
+        return r;
+      }
+      case "SavedVarsMigrate": {
+        const r = raw as Record<string, unknown>;
+        r.copied = r.copied ?? [];
+        return r;
+      }
+      case "ListBackups": {
+        const r = raw as Record<string, unknown>;
+        const snapshots = (r.snapshots ?? []) as Record<string, unknown>[];
+        for (const s of snapshots) s.folders = s.folders ?? [];
+        r.snapshots = snapshots;
+        return r;
+      }
+      case "RestoreBackup": {
+        const r = raw as Record<string, unknown>;
+        r.restored = r.restored ?? [];
+        r.skipped = r.skipped ?? [];
+        return r;
+      }
+      case "ExportCollection": {
+        const r = raw as Record<string, unknown>;
+        r.addons = r.addons ?? [];
+        return r;
+      }
+      case "ImportCollection": {
+        const r = raw as Record<string, unknown>;
+        r.installed = r.installed ?? [];
+        return r;
+      }
+      case "ExportSnapshot": {
+        const r = raw as Record<string, unknown>;
+        r.warnings = r.warnings ?? [];
+        return r;
+      }
+      case "CheckSnapshot": {
+        const r = raw as Record<string, unknown>;
+        r.updates = r.updates ?? [];
+        r.errors = r.errors ?? [];
+        return r;
+      }
       case "Validate": {
         const v = raw as Record<string, unknown>;
         v.addons = v.addons ?? [];
@@ -171,4 +227,25 @@ export const service: Service = {
     call("SetCollectionAddon", id, folder, enabled),
   InstallsStatus: () => call("InstallsStatus"),
   SyncUpdatesToAll: (allowReplace) => call("SyncUpdatesToAll", allowReplace),
+  AddonInfo: (arg) => call("AddonInfo", arg),
+  Sources: () => call("Sources"),
+  Doctor: () => call("Doctor"),
+  SavedVarsAccounts: () => call("SavedVarsAccounts"),
+  SavedVarsList: (account) => call("SavedVarsList", account),
+  SavedVarsBackup: (account) => call("SavedVarsBackup", account),
+  SavedVarsRestore: (account, backupPath) =>
+    call("SavedVarsRestore", account, backupPath),
+  SavedVarsReset: (account, addon) => call("SavedVarsReset", account, addon),
+  SavedVarsMigrate: (fromAccount, toAccount, addon) =>
+    call("SavedVarsMigrate", fromAccount, toAccount, addon),
+  BackupNow: () => call("BackupNow"),
+  ListBackups: () => call("ListBackups"),
+  RestoreBackup: (id, allowReplace) => call("RestoreBackup", id, allowReplace),
+  ExportCollection: (outPath, collectionID, includeSavedVars) =>
+    call("ExportCollection", outPath, collectionID, includeSavedVars),
+  ImportCollection: (pathOrURL) => call("ImportCollection", pathOrURL),
+  Config: () => call("Config"),
+  SetConfigKey: (key, value) => call("SetConfigKey", key, value),
+  ExportSnapshot: () => call("ExportSnapshot"),
+  CheckSnapshot: (snapshotJSON) => call("CheckSnapshot", snapshotJSON),
 };

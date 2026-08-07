@@ -12,12 +12,23 @@ import type {
   CuratedAddon,
   CuratedResult,
   Provider,
+  InfoResult,
+  ProviderInfo,
 } from "../types";
 import { formatBytes } from "../types";
 import { icon, type IconName } from "../icons";
 import { service } from "../api";
 import { toast } from "../components/toast";
 import { confirmDialog } from "../components/dialog";
+
+// `matches` on InfoResult is the candidate list for an ambiguous bare-name
+// lookup (the CLI's `wowfix info` search hits). Only provider/name/id are
+// guaranteed; the rest are optional so the UI degrades gracefully.
+interface InfoMatch {
+  provider?: string;
+  id?: string;
+  name?: string;
+}
 
 const PROVIDER_LABEL: Record<string, string> = {
   github: "GitHub",
@@ -87,6 +98,15 @@ export function mountCatalog(
   let timer = 0;
   let curated: CuratedResult | null = null;
   let compatOnly = false;
+  // --- addon info + sources (CLI `info` / `sources` parity) ----------------
+  let info: InfoResult | null = null;
+  let infoLoading = false;
+  let infoErr: string | null = null;
+  let infoArg = "";
+  let sourcesOpen = false;
+  let sources: ProviderInfo[] | null = null;
+  let sourcesLoading = false;
+  let sourcesErr: string | null = null;
 
   const doSearch = async (q: string): Promise<void> => {
     query = q;
@@ -128,6 +148,12 @@ export function mountCatalog(
     if (save) return `save:${save.dataset.saveImport}`;
     const curated = el.closest<HTMLElement>("[data-curated-install]");
     if (curated) return `curated:${curated.dataset.curatedInstall}`;
+    const infoBtn = el.closest<HTMLElement>("[data-info-row]");
+    if (infoBtn) return `info:${infoBtn.dataset.infoRow}`;
+    const matchBtn = el.closest<HTMLElement>("[data-info-match]");
+    if (matchBtn) return `info-match:${matchBtn.dataset.infoMatch}`;
+    if (el.closest("[data-info-close]")) return "info-close";
+    if (el.closest("[data-sources-toggle]")) return "sources";
     if (el.closest("[data-rescan]")) return "rescan";
     if (el.closest("[data-install]")) return "install";
     return null;
@@ -149,6 +175,8 @@ export function mountCatalog(
       target = el.querySelector<HTMLInputElement>("[data-source]");
     } else if (key === "install") {
       target = el.querySelector<HTMLElement>("[data-install]");
+    } else if (key === "sources") {
+      target = el.querySelector<HTMLElement>("[data-sources-toggle]");
     } else {
       const [kind, id] = key.split(":");
       if (kind === "filter") target = el.querySelector<HTMLElement>(`[data-filter="${id}"]`);
@@ -156,6 +184,9 @@ export function mountCatalog(
       else if (kind === "install") target = el.querySelector<HTMLElement>(`[data-install-row="${id}"]`);
       else if (kind === "save") target = el.querySelector<HTMLElement>(`[data-save-import="${id}"]`);
       else if (kind === "curated") target = el.querySelector<HTMLElement>(`[data-curated-install="${id}"]`);
+      else if (kind === "info") target = el.querySelector<HTMLElement>(`[data-info-row="${id}"]`);
+      else if (kind === "info-match") target = el.querySelector<HTMLElement>(`[data-info-match="${id}"]`);
+      else if (kind === "info-close") target = el.querySelector<HTMLElement>("[data-info-close]");
       else if (kind === "rescan") target = el.querySelector<HTMLElement>("[data-rescan]");
     }
     if (!target) return false;
@@ -172,7 +203,7 @@ export function mountCatalog(
     render();
     if (!key) return;
     if (restoreFocus(key)) pendingFocus = null;
-    else if (!searching && !installing && !saving) pendingFocus = null;
+    else if (!searching && !installing && !saving && !infoLoading && !sourcesLoading) pendingFocus = null;
   };
 
   const scheduleSearch = (): void => {
@@ -301,6 +332,60 @@ export function mountCatalog(
       installing = false;
       // Re-fetch so the row flips to Installed.
       await loadCurated();
+    }
+  };
+
+  // CLI `wowfix info` parity: resolve a hit's provider-scoped id (GitHub
+  // ids are "owner/repo"), or a bare name when no id is carried. An
+  // ambiguous bare name returns `matches` — the panel renders them and the
+  // user re-runs the lookup by clicking one.
+  const fetchInfo = async (arg: string): Promise<void> => {
+    if (infoLoading) return;
+    infoArg = arg;
+    info = null;
+    infoErr = null;
+    infoLoading = true;
+    rerender();
+    try {
+      info = await service.AddonInfo(arg);
+    } catch (err) {
+      infoErr = errText(err);
+      toast({ type: "error", title: "Addon info failed", message: errText(err) });
+    } finally {
+      infoLoading = false;
+      rerender();
+    }
+  };
+
+  const closeInfo = (): void => {
+    info = null;
+    infoErr = null;
+    infoArg = "";
+    rerender();
+  };
+
+  // CLI `wowfix sources` parity: lazy-load the provider list on first open.
+  const toggleSources = (): void => {
+    sourcesOpen = !sourcesOpen;
+    if (sourcesOpen && sources === null && !sourcesLoading) {
+      sourcesLoading = true;
+      sourcesErr = null;
+      rerender();
+      service
+        .Sources()
+        .then((res) => {
+          sources = res;
+        })
+        .catch((err) => {
+          sourcesErr = errText(err);
+          toast({ type: "error", title: "Could not load sources", message: errText(err) });
+        })
+        .finally(() => {
+          sourcesLoading = false;
+          rerender();
+        });
+    } else {
+      rerender();
     }
   };
 
@@ -488,6 +573,9 @@ export function mountCatalog(
                   )
                 : `<div class="catalog-rows">${shown.map(renderRow).join("")}</div>`
         }
+
+        ${infoPanelHtml()}
+        ${sourcesSectionHtml()}
       </div>`;
 
     const searchInput = el.querySelector<HTMLInputElement>("[data-search]")!;
@@ -562,6 +650,35 @@ export function mountCatalog(
         void installCurated(addon);
       });
     });
+    el.querySelectorAll<HTMLElement>("[data-info-row]").forEach((btn) => {
+      const entry = filtered[Number(btn.dataset.infoRow)];
+      if (!entry) return;
+      btn.addEventListener("click", () => {
+        pendingFocus = `info:${btn.dataset.infoRow}`;
+        void fetchInfo(entry.id || entry.name);
+      });
+    });
+    el.querySelectorAll<HTMLElement>("[data-info-match]").forEach((btn) => {
+      const m = infoMatchesOf(info)[Number(btn.dataset.infoMatch)];
+      if (!m) return;
+      btn.addEventListener("click", () => {
+        pendingFocus = `info-match:${btn.dataset.infoMatch}`;
+        const arg = m.id || m.name || "";
+        if (!arg) {
+          toast({ type: "error", title: "Cannot look up match", message: "This match has no id or name to look up." });
+          return;
+        }
+        void fetchInfo(arg);
+      });
+    });
+    el.querySelector("[data-info-close]")?.addEventListener("click", () => {
+      pendingFocus = null;
+      closeInfo();
+    });
+    el.querySelector("[data-sources-toggle]")?.addEventListener("click", () => {
+      pendingFocus = "sources";
+      toggleSources();
+    });
     el.querySelector("[data-go-setup]")?.addEventListener("click", () => actions.go("setup"));
 
     function submitSource(): void {
@@ -587,6 +704,10 @@ export function mountCatalog(
         ${providerChip(r.provider)}
       </div>
       <div class="catalog-action">
+        <button class="btn btn-outline btn-sm" data-info-row="${i}" ${infoLoading ? "disabled" : ""}
+          title="Show catalog details for ${escapeAttr(r.name)}">
+          ${icon("info", 14)}<span>Info</span>
+        </button>
         ${
           r.provider === "wago"
             ? `<button class="btn btn-outline btn-sm" data-save-import="${i}" ${saving ? "disabled" : ""} title="Save the import string for in-game import">
@@ -598,6 +719,132 @@ export function mountCatalog(
         }
       </div>
     </div>`;
+
+  const infoMatchesOf = (r: InfoResult | null): InfoMatch[] =>
+    r && Array.isArray(r.matches) ? (r.matches as unknown as InfoMatch[]) : [];
+
+  const infoKv = (label: string, valueHtml: string, mono = false): string => `
+    <div class="issue-item">
+      <span class="issue-sugg" style="flex:none; width:120px">${label}</span>
+      <span class="issue-msg${mono ? " mono" : ""}">${valueHtml}</span>
+    </div>`;
+
+  const renderInfoDetails = (r: InfoResult): string => {
+    const homepage = (r.homepage ?? "").trim();
+    const notes = (r.release_notes ?? "").trim();
+    return `
+      <div class="issue-list">
+        ${infoKv("Provider", r.provider ? providerChip(r.provider) : "—")}
+        ${infoKv("ID", escapeHtml(r.id || "—"), true)}
+        ${infoKv("Author", escapeHtml(r.author || "—"))}
+        ${infoKv("Latest version", escapeHtml(r.latest_version || "—"), true)}
+        ${infoKv("Game version", escapeHtml(r.game_version || "—"))}
+        ${infoKv("Updated", escapeHtml(formatDate(r.updated_at || "") || "—"))}
+        ${
+          homepage
+            ? `<div class="issue-item">
+                <span class="issue-sugg" style="flex:none; width:120px">Homepage</span>
+                <span class="issue-msg"><a href="${escapeAttr(homepage)}" target="_blank" rel="noreferrer">${escapeHtml(homepage)}</a></span>
+              </div>`
+            : infoKv("Homepage", "—")
+        }
+        ${infoKv("Summary", escapeHtml(r.summary || "—"))}
+        ${
+          notes
+            ? `<div class="issue-item">
+                <span class="issue-sugg" style="flex:none; width:120px">Release notes</span>
+                <span class="issue-msg">${notes
+                  .split("\n")
+                  .map((l) => (l ? `<div>${escapeHtml(l)}</div>` : "<div>&nbsp;</div>"))
+                  .join("")}</span>
+              </div>`
+            : ""
+        }
+      </div>`;
+  };
+
+  const renderInfoMatchRow = (m: InfoMatch, i: number): string => `
+    <div class="catalog-row">
+      <div class="catalog-info">
+        <div class="catalog-name-line">
+          <span class="catalog-name">${escapeHtml(m.name || "—")}</span>
+        </div>
+        <span class="catalog-summary mono">${escapeHtml(m.id || "")}</span>
+      </div>
+      <div class="catalog-meta">${m.provider ? providerChip(m.provider) : ""}</div>
+      <div class="catalog-action">
+        <button class="btn btn-primary btn-sm" data-info-match="${i}" ${infoLoading ? "disabled" : ""}>
+          ${icon("info", 14)}<span>Details</span>
+        </button>
+      </div>
+    </div>`;
+
+  const infoPanelHtml = (): string => {
+    if (!info && !infoLoading && !infoErr) return "";
+    let head: string;
+    let body: string;
+    if (infoLoading) {
+      head = `<b>Looking up ${escapeHtml(infoArg)}…</b>`;
+      body = `<div class="list-loading"><span class="spinner"></span><span>Fetching details…</span></div>`;
+    } else if (infoErr) {
+      head = `<b>${escapeHtml(infoArg)}</b>`;
+      body = `<div class="managed-error" role="alert">${icon("alert", 14)}<span>${escapeHtml(infoErr)}</span></div>`;
+    } else if (info && infoMatchesOf(info).length > 0) {
+      head = `<b>“${escapeHtml(infoArg)}” is ambiguous</b>`;
+      body = `
+        <div class="catalog-info-body">
+          <p class="result-hint">More than one addon matches — choose one to see its details:</p>
+          <div class="catalog-rows">${infoMatchesOf(info).map(renderInfoMatchRow).join("")}</div>
+        </div>`;
+    } else if (info) {
+      head = `<b>${escapeHtml(info.name || infoArg)}</b>${info.provider ? providerChip(info.provider) : ""}`;
+      body = renderInfoDetails(info);
+    } else {
+      return "";
+    }
+    return `
+      <section class="catalog-result" role="region" aria-label="Addon details">
+        <div class="result-summary">
+          <span class="result-summary-icon tile-ok">${icon("info", 16)}</span>
+          <span class="result-summary-text">${head}</span>
+        </div>
+        ${body}
+        <div class="result-actions">
+          <button class="btn btn-outline btn-sm" data-info-close>${icon("x", 14)}<span>Close</span></button>
+        </div>
+      </section>`;
+  };
+
+  const sourcesSectionHtml = (): string => {
+    const rows = sourcesLoading
+      ? `<div class="list-loading"><span class="spinner"></span><span>Loading providers…</span></div>`
+      : sourcesErr
+        ? `<div class="managed-error" role="alert">${icon("alert", 14)}<span>${escapeHtml(sourcesErr)}</span></div>`
+        : sources === null
+          ? ""
+          : `<ul class="issue-list">
+              ${sources
+                .map(
+                  (s) => `
+                <li class="issue-item">
+                  <span class="issue-text">
+                    <span class="issue-msg">${escapeHtml(s.name)}</span>
+                    <span class="issue-sugg">${escapeHtml(s.description)}</span>
+                  </span>
+                </li>`,
+                )
+                .join("")}
+            </ul>`;
+    return `
+      <section class="catalog-sources" aria-label="Catalog sources" style="margin:0 20px 12px">
+        <button class="btn btn-ghost btn-sm" data-sources-toggle aria-expanded="${sourcesOpen}" aria-controls="catalog-sources-body">
+          ${icon(sourcesOpen ? "chevron-down" : "chevron-right", 14)}
+          <span>Sources</span>
+          ${sources ? `<span class="muted">${sources.length} provider${sources.length === 1 ? "" : "s"}</span>` : ""}
+        </button>
+        ${sourcesOpen ? `<div class="catalog-sources-body" id="catalog-sources-body">${rows}</div>` : ""}
+      </section>`;
+  };
 
   render();
   void loadCurated();
@@ -617,6 +864,16 @@ function providerChip(provider: string): string {
 function displayNameFromSource(src: string): string {
   const seg = src.split(/[\\/?#]/).filter(Boolean).pop() ?? src;
   return seg.replace(/\.zip$/i, "").replace(/[-_](main|master)$/i, "");
+}
+
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return (
+    d.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" }) +
+    " " +
+    d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+  );
 }
 
 function emptyCard(glyph: IconName, title: string, sub: string, cta: string): string {

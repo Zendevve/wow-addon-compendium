@@ -41,6 +41,21 @@ import type {
   SyncResult,
   TrackedResult,
   RollbackResult,
+  InfoResult,
+  ProviderInfo,
+  DoctorReport,
+  SavedVarsListResult,
+  SavedVarsBackupResult,
+  SavedVarsMigrateResult,
+  BackupInfo,
+  BackupResult,
+  ListBackupsResult,
+  RestoreBackupResult,
+  ExportResult,
+  ImportResult,
+  ConfigView,
+  SnapshotResult,
+  SnapshotCheck,
 } from "./types";
 
 const DELAY_MS = 350;
@@ -125,6 +140,7 @@ interface MockDB {
   trackedState: Record<string, { pinned: boolean; ignored: boolean }>;
   collections: MockCollection[];
   activeCollectionId: string;
+  backups: BackupInfo[];
 }
 
 // Seeded collections: "pve" is the active loadout (4 enabled of 6), "pvp"
@@ -200,6 +216,47 @@ const INSTALLS_STATUS: InstallStatus[] = [
     problems: 1,
     errors: 0,
     health: 95,
+  },
+];
+
+// Saved-variables accounts under WTF\Account, with the per-account file
+// stems the SavedVarsList view renders as "<name>.lua".
+const SAVED_VAR_ACCOUNTS = ["WrathMain", "TurtleAlt", "RetailMain"];
+
+const SAVED_VAR_FILES = ["QuestieDB", "AtlasLoot", "DBM", "WeakAuras", "AddOns"];
+
+// Editable settings for the Settings view. SetConfigKey mutates these;
+// Config() merges them with the live install state.
+const SETTINGS: {
+  theme: string;
+  auto_backup: boolean;
+  confirmations: boolean;
+  backups_dir: string;
+  curseforge_api_key: string;
+  collections_dir: string;
+} = {
+  theme: "dark",
+  auto_backup: true,
+  confirmations: true,
+  backups_dir: "C:\\Users\\mock\\wowfix\\backups",
+  curseforge_api_key: "cf-************",
+  collections_dir: "C:\\Users\\mock\\wowfix\\collections",
+};
+
+// Snapshot history for the Backups view. BackupNow unshifts a fresh entry so
+// a create → list cycle shows the new snapshot.
+const SEED_BACKUPS: BackupInfo[] = [
+  {
+    id: "2026-08-07T10-00-00.000Z",
+    created_at: "2026-08-07T10:00:00.000Z",
+    reason: "manual",
+    folders: ["Questie", "DeadlyBossMods", "WeakAuras"],
+  },
+  {
+    id: "2026-08-05T18-30-00.000Z",
+    created_at: "2026-08-05T18:30:00.000Z",
+    reason: "collection switch pvp",
+    folders: ["Questie", "AtlasLoot"],
   },
 ];
 
@@ -779,6 +836,7 @@ function freshDB(): MockDB {
       addons: c.addons.map((a) => ({ ...a })),
     })),
     activeCollectionId: "pve",
+    backups: SEED_BACKUPS.map((b) => ({ ...b, folders: [...b.folders] })),
   };
 }
 
@@ -1286,6 +1344,333 @@ export function createMockService(): Service {
         total_failed: 0,
       };
     },
+
+    async AddonInfo(arg: string): Promise<InfoResult> {
+      await delay(500);
+      const q = arg.trim();
+      const ql = q.toLowerCase();
+      const exact = CATALOG_POOL.filter(
+        (c) =>
+          c.id.toLowerCase() === ql ||
+          c.homepage.toLowerCase() === ql ||
+          c.name.toLowerCase() === ql,
+      );
+      if (exact.length === 1) {
+        const c = exact[0];
+        return {
+          provider: c.provider,
+          id: c.id,
+          name: c.name,
+          author: c.author,
+          summary: c.summary,
+          latest_version: c.latest_version,
+          homepage: c.homepage,
+          game_version: c.game_version,
+          updated_at: "2026-07-28T12-00-00.000Z",
+          release_notes: c.game_version
+            ? `Updated for ${c.game_version}.`
+            : "Updated release.",
+        };
+      }
+      // Ambiguous (or unknown): return candidates so the caller re-runs with
+      // the chosen provider-scoped id.
+      const fuzzy = CATALOG_POOL.filter((c) =>
+        [c.name, c.id, c.author, c.summary].join(" ").toLowerCase().includes(ql),
+      );
+      const matches = (exact.length > 1 ? exact : fuzzy.slice(0, 5)).map((c) => ({
+        provider: c.provider,
+        id: c.id,
+        name: c.name,
+        summary: c.summary,
+        homepage: c.homepage,
+      }));
+      return { ...emptyInfo(q), matches };
+    },
+
+    async Sources(): Promise<ProviderInfo[]> {
+      await delay(200);
+      return [
+        { name: "github", description: "GitHub releases — owner/repo or repository URL" },
+        { name: "curseforge", description: "CurseForge addon page — addon slug or page URL" },
+        { name: "wowinterface", description: "WoWInterface download page — file info URL" },
+        { name: "tukui", description: "Tukui addon page — addon id or page URL" },
+        { name: "wago", description: "Wago.io — WeakAuras / Plater import strings" },
+      ];
+    },
+
+    async Doctor(): Promise<DoctorReport> {
+      await delay(600);
+      const problems = db.addons.filter((a) => a.issues.length > 0).length;
+      const pending = db.tracked.filter(
+        (u) => u.current_version !== u.latest_version,
+      ).length;
+      const checks: DoctorReport["checks"] = [
+        {
+          name: "install",
+          status: db.install ? "ok" : "error",
+          message: db.install
+            ? `Resolved ${db.install.flavor || "root"} install at ${db.install.root}`
+            : "No WoW installation configured",
+        },
+        {
+          name: "addons",
+          status: problems === 0 ? "ok" : problems < 3 ? "warn" : "error",
+          message: `${db.addons.length} addon${db.addons.length === 1 ? "" : "s"}, ${problems} with issues`,
+        },
+        {
+          name: "updates",
+          status: pending === 0 ? "ok" : "warn",
+          message:
+            pending === 0
+              ? "All tracked addons are up to date"
+              : `${pending} tracked addon${pending === 1 ? "" : "s"} have pending updates`,
+        },
+        {
+          name: "saved-variables",
+          status: "info",
+          message: `${SAVED_VAR_ACCOUNTS.length} account${SAVED_VAR_ACCOUNTS.length === 1 ? "" : "s"} under WTF\\Account`,
+        },
+        {
+          name: "backups",
+          status: "ok",
+          message: `${db.backups.length} snapshot${db.backups.length === 1 ? "" : "s"} in ${SETTINGS.backups_dir}`,
+        },
+      ];
+      return { checks };
+    },
+
+    async SavedVarsAccounts(): Promise<string[]> {
+      await delay(250);
+      return [...SAVED_VAR_ACCOUNTS];
+    },
+
+    async SavedVarsList(account: string): Promise<SavedVarsListResult> {
+      await delay(450);
+      if (!SAVED_VAR_ACCOUNTS.includes(account)) {
+        throw new Error(`account "${account}" not found under WTF\\Account`);
+      }
+      return {
+        wtf_root: "C:\\Games\\World of Warcraft Classic\\WTF",
+        account: `WTF\\Account\\${account}`,
+        files: [...SAVED_VAR_FILES],
+      };
+    },
+
+    async SavedVarsBackup(account: string): Promise<SavedVarsBackupResult> {
+      await delay(700);
+      if (!SAVED_VAR_ACCOUNTS.includes(account)) {
+        throw new Error(`account "${account}" not found under WTF\\Account`);
+      }
+      return {
+        path: `${SETTINGS.backups_dir}\\SavedVariables\\${account}-${new Date()
+          .toISOString()
+          .replace(/[:.]/g, "-")}.zip`,
+        account,
+      };
+    },
+
+    async SavedVarsRestore(account: string, backupPath: string): Promise<void> {
+      await delay(700);
+      if (!SAVED_VAR_ACCOUNTS.includes(account)) {
+        throw new Error(`account "${account}" not found under WTF\\Account`);
+      }
+      if (!backupPath.trim()) throw new Error("backup path is required");
+    },
+
+    async SavedVarsReset(account: string, addon: string): Promise<void> {
+      await delay(500);
+      if (!SAVED_VAR_ACCOUNTS.includes(account)) {
+        throw new Error(`account "${account}" not found under WTF\\Account`);
+      }
+      if (!addon.trim()) throw new Error("addon name is required");
+    },
+
+    async SavedVarsMigrate(
+      fromAccount: string,
+      toAccount: string,
+      addon: string,
+    ): Promise<SavedVarsMigrateResult> {
+      await delay(800);
+      if (fromAccount === toAccount) {
+        throw new Error("source and target account must differ");
+      }
+      const file = addon.trim() || "CharacterSettings";
+      return { copied: [`${file}.lua`] };
+    },
+
+    async BackupNow(): Promise<BackupResult> {
+      await delay(900);
+      const id = new Date().toISOString();
+      db.backups.unshift({
+        id,
+        created_at: id,
+        reason: "manual",
+        folders: db.addons.map((a) => a.folder_name),
+      });
+      return { id };
+    },
+
+    async ListBackups(): Promise<ListBackupsResult> {
+      await delay(350);
+      return {
+        snapshots: db.backups.map((b) => ({ ...b, folders: [...b.folders] })),
+      };
+    },
+
+    async RestoreBackup(
+      id: string,
+      allowReplace: boolean,
+    ): Promise<RestoreBackupResult> {
+      await delay(1000);
+      const snap = db.backups.find((b) => b.id === id);
+      if (!snap) throw new Error(`backup snapshot "${id}" not found`);
+      return allowReplace
+        ? { restored: [...snap.folders], skipped: [] }
+        : { restored: [], skipped: [...snap.folders] };
+    },
+
+    async ExportCollection(
+      outPath: string,
+      collectionID: string,
+      includeSavedVars: boolean,
+    ): Promise<ExportResult> {
+      await delay(800);
+      const addons = collectionID
+        ? (db.collections.find((c) => c.id === collectionID)?.addons.map((a) => a.folder) ?? [])
+        : db.addons.map((a) => a.folder_name);
+      return {
+        out:
+          outPath.trim() ||
+          `C:\\Users\\mock\\Downloads\\wowfix-export${collectionID ? `-${collectionID}` : ""}.zip`,
+        addons: addons.length,
+        collection: collectionID,
+      };
+    },
+
+    async ImportCollection(pathOrURL: string): Promise<ImportResult> {
+      await delay(900);
+      const src = pathOrURL.trim();
+      if (!src) return { installed: [] };
+      const display = displayNameFromSource(src);
+      const folder = folderFor(display);
+      const exists = db.addons.some(
+        (a) => a.folder_name.toLowerCase() === folder.toLowerCase(),
+      );
+      if (exists) return { installed: [] };
+      db.addons.push({
+        folder_name: folder,
+        base_name: folder,
+        suggested_name: folder,
+        status: "ok",
+        nested: false,
+        size_bytes: 1572864,
+        fixable: false,
+        health: 100,
+        tracked: true,
+        drifted: false,
+        pinned: false,
+        ignored: false,
+        tracked_source: src,
+        toc: {
+          path: `${db.install?.addons_dir ?? "C:\\Games\\World of Warcraft Classic\\Interface\\AddOns"}\\${folder}\\${folder}.toc`,
+          name: folder,
+          title: display,
+          interface: 30300,
+          raw_interface: "30300",
+          version: "1.0",
+          primary: true,
+        },
+        issues: [],
+        compat: [compat(`${folder}.toc`, 30300)],
+      });
+      db.scannedAt = new Date().toISOString();
+      return { installed: [folder] };
+    },
+
+    async Config(): Promise<ConfigView> {
+      await delay(250);
+      return {
+        wow_path: db.install?.root ?? "",
+        flavor: db.install?.flavor ?? "",
+        profile: db.install?.profile_id ?? "wrath",
+        collection: db.activeCollectionId,
+        theme: SETTINGS.theme,
+        auto_backup: SETTINGS.auto_backup,
+        confirmations: SETTINGS.confirmations,
+        backups_dir: SETTINGS.backups_dir,
+        curseforge_api_key: SETTINGS.curseforge_api_key,
+        collections_dir: SETTINGS.collections_dir,
+      };
+    },
+
+    async SetConfigKey(key: string, value: string): Promise<void> {
+      await delay(200);
+      switch (key) {
+        case "theme":
+        case "backups_dir":
+        case "curseforge_api_key":
+        case "collections_dir":
+          SETTINGS[key] = value;
+          break;
+        case "auto_backup":
+        case "confirmations":
+          SETTINGS[key] = value === "true";
+          break;
+        default:
+          throw new Error(`config key "${key}" is read-only in the app UI`);
+      }
+    },
+
+    async ExportSnapshot(): Promise<SnapshotResult> {
+      await delay(700);
+      const snapshot = {
+        version: 1,
+        profile:
+          PROFILES.find((p) => p.id === db.install?.profile_id)?.family ?? "wrath",
+        exported_at: new Date().toISOString(),
+        addons: db.tracked.map((u) => ({
+          folder: u.folder,
+          title: u.title,
+          current_version: u.current_version,
+          latest_version: u.latest_version,
+          provider: u.provider,
+          id: u.id,
+          source: u.source,
+        })),
+      };
+      return {
+        snapshot_json: JSON.stringify(snapshot, null, 2),
+        exported_at: snapshot.exported_at,
+        addon_count: db.tracked.length,
+        warnings: [],
+      };
+    },
+
+    async CheckSnapshot(snapshotJSON: string): Promise<SnapshotCheck> {
+      await delay(450);
+      if (!snapshotJSON.trim()) throw new Error("snapshot JSON is empty");
+      return {
+        updates: db.tracked
+          .filter((u) => u.current_version !== u.latest_version)
+          .map((u) => ({ ...u })),
+        errors: [],
+      };
+    },
+  };
+}
+
+/** Placeholder InfoResult for unresolved or ambiguous lookups. */
+function emptyInfo(q: string): InfoResult {
+  return {
+    provider: "",
+    id: "",
+    name: q,
+    author: "",
+    summary: "",
+    latest_version: "",
+    homepage: "",
+    game_version: "",
+    updated_at: "",
   };
 }
 

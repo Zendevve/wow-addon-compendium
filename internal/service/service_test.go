@@ -21,6 +21,7 @@ import (
 	"github.com/wowfix/wowfix/internal/catalog"
 	"github.com/wowfix/wowfix/internal/config"
 	"github.com/wowfix/wowfix/internal/detector"
+	"github.com/wowfix/wowfix/internal/importexport"
 	"github.com/wowfix/wowfix/internal/models"
 	"github.com/wowfix/wowfix/internal/scanner"
 )
@@ -327,6 +328,7 @@ type mockGitHub struct {
 	repos   map[string]string // "owner/repo" -> latest release tag
 	zips    map[string][]byte // "owner/repo" -> archive bytes for Download
 	results []string          // "owner/repo" names returned by search
+	notes   map[string]string // "owner/repo" -> latest release notes body
 }
 
 // client returns an http.Client whose GitHub traffic reaches only the
@@ -373,8 +375,8 @@ func (m *mockGitHub) client(t *testing.T) *http.Client {
 					return
 				}
 				w.Header().Set("Content-Type", "application/json")
-				fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":"addon.zip","browser_download_url":"https://github.com/dl/%s"}]}`,
-					tag, url.PathEscape(id))
+				fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":"addon.zip","browser_download_url":"https://github.com/dl/%s"}],"body":%q}`,
+					tag, url.PathEscape(id), m.notes[id])
 				return
 			}
 			owner, name, ok := strings.Cut(rest, "/")
@@ -438,7 +440,7 @@ func newTestCatalogService(t *testing.T) (*Service, string, string, *mockGitHub)
 	s := New(store)
 	s.registryPath = filepath.Join(t.TempDir(), "registry.json")
 	s.enabledProviders = map[string]bool{catalog.ProviderGitHub: true}
-	mock := &mockGitHub{repos: map[string]string{}, zips: map[string][]byte{}}
+	mock := &mockGitHub{repos: map[string]string{}, zips: map[string][]byte{}, notes: map[string]string{}}
 	s.httpClient = mock.client(t)
 	return s, addonsDir, s.registryPath, mock
 }
@@ -1865,5 +1867,703 @@ func TestCuratedNoSetForUnknownFamily(t *testing.T) {
 	}
 	if res.Family != "tbc" || len(res.Addons) != 0 {
 		t.Errorf("tbc result = %+v, want empty addons", res)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CLI parity: info / sources / doctor / savedvars / backups / export /
+// import / config. Every method is exercised against temp trees only.
+// ---------------------------------------------------------------------------
+
+// TestServiceAddonInfoFromSource resolves a github "owner/repo" source
+// through the mock provider and expects the resolved fields plus the
+// stripped GitHub release notes.
+func TestServiceAddonInfoFromSource(t *testing.T) {
+	s, _, _, mock := newTestCatalogService(t)
+	mock.repos["acme/newaddon"] = "v1.0.0"
+	mock.notes["acme/newaddon"] = "## v1.0.0\n\n- **fixed** a bug\n- see `https://example.test`"
+
+	res, err := s.AddonInfo("acme/newaddon")
+	if err != nil {
+		t.Fatalf("AddonInfo: %v", err)
+	}
+	if res.Provider != "github" || res.ID != "acme/newaddon" {
+		t.Errorf("provider/id = %q/%q, want github/acme/newaddon", res.Provider, res.ID)
+	}
+	if res.Name != "newaddon" || res.Author != "acme" {
+		t.Errorf("name/author = %q/%q", res.Name, res.Author)
+	}
+	if res.LatestVersion != "v1.0.0" {
+		t.Errorf("latest_version = %q, want v1.0.0", res.LatestVersion)
+	}
+	if !strings.Contains(res.ReleaseNotes, "fixed a bug") || !strings.Contains(res.ReleaseNotes, "https://example.test") {
+		t.Errorf("release_notes = %q, want markdown stripped to plain text", res.ReleaseNotes)
+	}
+	if res.Matches != nil {
+		t.Errorf("matches = %v, want nil for a resolved source", res.Matches)
+	}
+}
+
+// TestServiceAddonInfoUnknownProvider errors when the classified
+// provider is not enabled in the catalog.
+func TestServiceAddonInfoUnknownProvider(t *testing.T) {
+	s, _, _, _ := newTestCatalogService(t)
+	_, err := s.AddonInfo("https://www.wowinterface.com/downloads/info9999-Foo.html")
+	if err == nil {
+		t.Fatal("AddonInfo with a disabled provider should error")
+	}
+	if !strings.Contains(err.Error(), "not available") {
+		t.Errorf("err = %q, want provider-not-available", err.Error())
+	}
+}
+
+// TestServiceAddonInfoBareNameSingleMatch resolves the unique search
+// hit directly, without a second provider round-trip.
+func TestServiceAddonInfoBareNameSingleMatch(t *testing.T) {
+	s, _, _, mock := newTestCatalogService(t)
+	mock.results = []string{"acme/newaddon"}
+	mock.repos["acme/newaddon"] = "v1.0.0"
+
+	res, err := s.AddonInfo("newaddon")
+	if err != nil {
+		t.Fatalf("AddonInfo: %v", err)
+	}
+	if res.Provider != "github" || res.ID != "acme/newaddon" {
+		t.Errorf("provider/id = %q/%q, want github/acme/newaddon", res.Provider, res.ID)
+	}
+	if res.Name != "newaddon" {
+		t.Errorf("name = %q, want newaddon", res.Name)
+	}
+	if res.Matches != nil {
+		t.Errorf("matches = %v, want nil for a unique match", res.Matches)
+	}
+}
+
+// TestServiceAddonInfoBareNameAmbiguous returns the candidate matches
+// with a nil error so the frontend can ask the user which one.
+func TestServiceAddonInfoBareNameAmbiguous(t *testing.T) {
+	s, _, _, mock := newTestCatalogService(t)
+	mock.results = []string{"xperl/xperl", "flux/flux"}
+
+	res, err := s.AddonInfo("x")
+	if err != nil {
+		t.Fatalf("AddonInfo: %v", err)
+	}
+	if len(res.Matches) != 2 {
+		t.Fatalf("matches = %d, want 2: %+v", len(res.Matches), res.Matches)
+	}
+	names := map[string]bool{}
+	for _, m := range res.Matches {
+		names[m.Name] = true
+		if m.Provider != "github" {
+			t.Errorf("match %q provider = %q, want github", m.Name, m.Provider)
+		}
+	}
+	if !names["xperl"] || !names["flux"] {
+		t.Errorf("matches = %v, want xperl and flux", res.Matches)
+	}
+	if res.Provider != "" || res.Name != "" {
+		t.Errorf("resolved fields should stay empty on ambiguity, got %+v", res)
+	}
+}
+
+// TestServiceAddonInfoBareNameNoMatch errors like the CLI.
+func TestServiceAddonInfoBareNameNoMatch(t *testing.T) {
+	s, _, _, _ := newTestCatalogService(t)
+	_, err := s.AddonInfo("zzz-no-such-addon")
+	if err == nil {
+		t.Fatal("AddonInfo with no matches should error")
+	}
+	if !strings.Contains(err.Error(), "no matches") {
+		t.Errorf("err = %q, want no-matches error", err.Error())
+	}
+}
+
+// TestServiceSources lists the four providers with their exact CLI
+// descriptions, in order.
+func TestServiceSources(t *testing.T) {
+	s, _ := newTestService(t)
+	srcs, err := s.Sources()
+	if err != nil {
+		t.Fatalf("Sources: %v", err)
+	}
+	want := []ProviderInfo{
+		{Name: "github", Description: "GitHub releases API — unauthenticated, ~60 requests/hour"},
+		{Name: "curseforge", Description: "modern Core API with WOWFIX_CURSEFORGE_API_KEY, else deprecated legacy endpoint"},
+		{Name: "wowinterface", Description: "MMOUI filelist JSON"},
+		{Name: "tukui", Description: "tukui.org API"},
+	}
+	if len(srcs) != len(want) {
+		t.Fatalf("sources = %d, want %d", len(srcs), len(want))
+	}
+	for i := range want {
+		if srcs[i] != want[i] {
+			t.Errorf("source[%d] = %+v, want %+v", i, srcs[i], want[i])
+		}
+	}
+}
+
+// TestServiceDoctor checks the report structure: one check per CLI
+// doctor line, valid statuses, and the deterministic verdicts of a
+// healthy temp install.
+func TestServiceDoctor(t *testing.T) {
+	s, _ := newTestService(t)
+	s.registryPath = filepath.Join(t.TempDir(), "registry.json")
+
+	rep, err := s.Doctor()
+	if err != nil {
+		t.Fatalf("Doctor: %v", err)
+	}
+	byName := map[string]DoctorCheck{}
+	for _, c := range rep.Checks {
+		if _, dup := byName[c.Name]; dup {
+			t.Errorf("duplicate doctor check %q", c.Name)
+		}
+		byName[c.Name] = c
+		switch c.Status {
+		case "ok", "warn", "error", "info":
+		default:
+			t.Errorf("check %q has invalid status %q", c.Name, c.Status)
+		}
+	}
+	for _, want := range []string{
+		"config", "profile", "theme", "collection", "install", "flavor",
+		"permissions", "scan", "backups", "trash", "registry", "collections", "savedvars",
+	} {
+		if _, ok := byName[want]; !ok {
+			t.Errorf("doctor check %q missing", want)
+		}
+	}
+	if c := byName["profile"]; c.Status != "ok" || c.Message != "wrath" {
+		t.Errorf("profile check = %+v, want ok wrath", c)
+	}
+	if c := byName["theme"]; c.Status != "ok" || c.Message != "dark" {
+		t.Errorf("theme check = %+v, want ok dark", c)
+	}
+	if c := byName["collection"]; c.Status != "ok" {
+		t.Errorf("collection check = %+v, want ok (none set)", c)
+	}
+	if c := byName["permissions"]; c.Status != "ok" {
+		t.Errorf("permissions check = %+v, want ok", c)
+	}
+	if c := byName["scan"]; !strings.Contains(c.Message, "addon(s)") {
+		t.Errorf("scan check = %+v, want addon counts", c)
+	}
+	if c := byName["backups"]; c.Status != "info" {
+		t.Errorf("backups check = %+v, want info", c)
+	}
+	if c := byName["trash"]; c.Status != "ok" {
+		t.Errorf("trash check = %+v, want ok", c)
+	}
+	if c := byName["registry"]; c.Status != "info" {
+		t.Errorf("registry check = %+v, want info (none yet)", c)
+	}
+	if c := byName["collections"]; c.Status != "warn" {
+		t.Errorf("collections check = %+v, want warn (not configured)", c)
+	}
+	if c := byName["savedvars"]; c.Status != "error" {
+		t.Errorf("savedvars check = %+v, want error (WTF missing)", c)
+	}
+}
+
+// savedVarsTestService wires a Service to a fake install whose WTF
+// tree holds two accounts with SavedVariables files.
+func savedVarsTestService(t *testing.T) (*Service, string) {
+	t.Helper()
+	root := t.TempDir()
+	addonsDir := filepath.Join(root, "Interface", "AddOns")
+	writeFixture(t, addonsDir)
+	write := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(root, "WTF", "Account", rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join("A1", "SavedVariables", "DBM.lua"), "DBM = {}\n")
+	write(filepath.Join("A1", "SavedVariables", "BigWigs.lua"), "BigWigs = {}\n")
+	write(filepath.Join("A2", "SavedVariables", "WeakAuras.lua"), "WeakAuras = {}\n")
+
+	store := config.NewStoreAt(filepath.Join(t.TempDir(), "config.json"))
+	cfg := config.Default()
+	cfg.WoWPath = root
+	cfg.Flavor = ""
+	if err := store.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	return New(store), addonsDir
+}
+
+// TestServiceSavedVarsAccountsAndList lists the accounts and one
+// account's files; an empty account picks the first one like the CLI.
+func TestServiceSavedVarsAccountsAndList(t *testing.T) {
+	s, _ := savedVarsTestService(t)
+
+	accts, err := s.SavedVarsAccounts()
+	if err != nil {
+		t.Fatalf("SavedVarsAccounts: %v", err)
+	}
+	if !slices.Equal(accts, []string{"A1", "A2"}) {
+		t.Errorf("accounts = %v, want [A1 A2]", accts)
+	}
+
+	res, err := s.SavedVarsList("A1")
+	if err != nil {
+		t.Fatalf("SavedVarsList: %v", err)
+	}
+	if res.Account != "A1" {
+		t.Errorf("account = %q, want A1", res.Account)
+	}
+	if !slices.Equal(res.Files, []string{"BigWigs", "DBM"}) {
+		t.Errorf("files = %v, want [BigWigs DBM]", res.Files)
+	}
+	if !strings.HasSuffix(res.WtfRoot, "WTF") {
+		t.Errorf("wtf_root = %q, want .../WTF", res.WtfRoot)
+	}
+
+	first, err := s.SavedVarsList("")
+	if err != nil {
+		t.Fatalf("SavedVarsList(\"\"): %v", err)
+	}
+	if first.Account != "A1" {
+		t.Errorf("default account = %q, want A1", first.Account)
+	}
+}
+
+// TestServiceSavedVarsBackupRestoreReset backs up an account, mutates
+// the live files, restores them from the backup and resets one addon.
+func TestServiceSavedVarsBackupRestoreReset(t *testing.T) {
+	s, addonsDir := savedVarsTestService(t)
+	root := filepath.Dir(filepath.Dir(addonsDir))
+	live := filepath.Join(root, "WTF", "Account", "A1", "SavedVariables")
+
+	back, err := s.SavedVarsBackup("A1")
+	if err != nil {
+		t.Fatalf("SavedVarsBackup: %v", err)
+	}
+	if back.Account != "A1" {
+		t.Errorf("account = %q, want A1", back.Account)
+	}
+	if !strings.Contains(back.Path, filepath.Join("WTF", "savedvars-backups")) {
+		t.Errorf("backup path = %q, want under WTF/savedvars-backups", back.Path)
+	}
+	if _, err := os.Stat(filepath.Join(back.Path, "DBM.lua")); err != nil {
+		t.Errorf("DBM.lua missing in backup: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(live, "DBM.lua"), []byte("DBM = {corrupted = true}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SavedVarsRestore("A1", back.Path); err != nil {
+		t.Fatalf("SavedVarsRestore: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(live, "DBM.lua"))
+	if err != nil {
+		t.Fatalf("DBM.lua gone after restore: %v", err)
+	}
+	if strings.Contains(string(data), "corrupted") {
+		t.Error("restore did not replace the live file")
+	}
+
+	if err := s.SavedVarsReset("A1", "DBM"); err != nil {
+		t.Fatalf("SavedVarsReset: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(live, "DBM.lua")); !os.IsNotExist(err) {
+		t.Errorf("DBM.lua should be gone after reset, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(live, "BigWigs.lua")); err != nil {
+		t.Errorf("BigWigs.lua should survive the reset: %v", err)
+	}
+}
+
+// TestServiceSavedVarsMigrate copies a single addon and then the
+// remaining files, never overwriting existing destinations.
+func TestServiceSavedVarsMigrate(t *testing.T) {
+	s, addonsDir := savedVarsTestService(t)
+	root := filepath.Dir(filepath.Dir(addonsDir))
+
+	copied, err := s.SavedVarsMigrate("A1", "A2", "DBM")
+	if err != nil {
+		t.Fatalf("SavedVarsMigrate(addon): %v", err)
+	}
+	if !slices.Equal(copied.Copied, []string{"DBM"}) {
+		t.Errorf("copied = %v, want [DBM]", copied)
+	}
+	if _, err := os.Stat(filepath.Join(root, "WTF", "Account", "A2", "SavedVariables", "DBM.lua")); err != nil {
+		t.Errorf("DBM.lua not migrated to A2: %v", err)
+	}
+
+	copied, err = s.SavedVarsMigrate("A2", "A1", "")
+	if err != nil {
+		t.Fatalf("SavedVarsMigrate(all): %v", err)
+	}
+	if !slices.Equal(copied.Copied, []string{"WeakAuras"}) {
+		t.Errorf("copied = %v, want [WeakAuras] (existing files skipped)", copied)
+	}
+}
+
+// TestServiceBackupNowListRestore snapshots the fixture addons, lists
+// the history with manifest details and restores the snapshot in place.
+func TestServiceBackupNowListRestore(t *testing.T) {
+	s, _ := newTestService(t)
+
+	bres, err := s.BackupNow()
+	if err != nil {
+		t.Fatalf("BackupNow: %v", err)
+	}
+	if bres.ID == "" {
+		t.Fatal("backup id is empty")
+	}
+
+	list, err := s.ListBackups()
+	if err != nil {
+		t.Fatalf("ListBackups: %v", err)
+	}
+	if len(list.Snapshots) != 1 {
+		t.Fatalf("snapshots = %d, want 1", len(list.Snapshots))
+	}
+	snap := list.Snapshots[0]
+	if snap.ID == "" {
+		t.Error("snapshot id empty")
+	}
+	if snap.Reason != "manual backup" {
+		t.Errorf("reason = %q, want %q", snap.Reason, "manual backup")
+	}
+	if snap.Folders != 7 {
+		t.Errorf("folders = %d, want 7 (fixture addon folders)", snap.Folders)
+	}
+	if snap.CreatedAt.IsZero() {
+		t.Error("created_at is zero")
+	}
+
+	restored, err := s.RestoreBackup(snap.ID, true)
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if len(restored.Restored) != 7 || len(restored.Skipped) != 0 {
+		t.Errorf("restored = %d, skipped = %d; want 7 restored, 0 skipped",
+			len(restored.Restored), len(restored.Skipped))
+	}
+
+	// allowReplace=false skips every existing destination.
+	second, err := s.RestoreBackup(snap.ID, false)
+	if err != nil {
+		t.Fatalf("RestoreBackup(false): %v", err)
+	}
+	if len(second.Restored) != 0 || len(second.Skipped) != 7 {
+		t.Errorf("restored = %d, skipped = %d; want 0 restored, 7 skipped",
+			len(second.Restored), len(second.Skipped))
+	}
+}
+
+// TestServiceExportCollectionJSON exports the on-disk scan as a JSON
+// manifest with the CLI's name, game version and folder list.
+func TestServiceExportCollectionJSON(t *testing.T) {
+	s, _ := newTestService(t)
+	out := filepath.Join(t.TempDir(), "export.json")
+	res, err := s.ExportCollection(out, "", false)
+	if err != nil {
+		t.Fatalf("ExportCollection(json): %v", err)
+	}
+	if res.Out != out {
+		t.Errorf("out = %q, want %q", res.Out, out)
+	}
+	if res.Addons != 7 {
+		t.Errorf("addons = %d, want 7 (fixture folders)", res.Addons)
+	}
+	if res.Collection != "" {
+		t.Errorf("collection = %q, want empty", res.Collection)
+	}
+
+	mf, err := importexport.ImportManifest(out)
+	if err != nil {
+		t.Fatalf("ImportManifest: %v", err)
+	}
+	if mf.Name != "wowfix-export" {
+		t.Errorf("manifest name = %q, want wowfix-export", mf.Name)
+	}
+	if mf.GameVersion != "wrath" {
+		t.Errorf("game_version = %q, want wrath (cfg.Profile)", mf.GameVersion)
+	}
+	if len(mf.Addons) != 7 {
+		t.Fatalf("manifest addons = %d, want 7", len(mf.Addons))
+	}
+	folders := map[string]bool{}
+	for _, a := range mf.Addons {
+		if a.Provider != "" {
+			t.Errorf("untracked export entry %q has provider %q", a.Folder, a.Provider)
+		}
+		folders[a.Folder] = true
+	}
+	for _, f := range []string{"AtlasLoot", "Questie-main", "DPSMate-main", "AuxUI", "Questie", "Inventory", "TempFolder"} {
+		if !folders[f] {
+			t.Errorf("manifest missing folder %q", f)
+		}
+	}
+}
+
+// TestServiceExportCollectionByID exports a named collection: the
+// manifest carries the collection name and its addon state.
+func TestServiceExportCollectionByID(t *testing.T) {
+	s, _ := collectionTestService(t, "A", "A.disabled")
+	created, err := s.CreateCollection("pve")
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "export.json")
+	res, err := s.ExportCollection(out, created.ID, false)
+	if err != nil {
+		t.Fatalf("ExportCollection by id: %v", err)
+	}
+	if res.Addons != 2 {
+		t.Errorf("addons = %d, want 2 (A + A.disabled)", res.Addons)
+	}
+	mf, err := importexport.ImportManifest(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mf.Name != "pve" {
+		t.Errorf("manifest name = %q, want pve", mf.Name)
+	}
+	if len(mf.Addons) != 2 {
+		t.Errorf("manifest addons = %d, want 2", len(mf.Addons))
+	}
+}
+
+// TestServiceExportCollectionYAML writes a YAML manifest that
+// ImportManifestAny can read back.
+func TestServiceExportCollectionYAML(t *testing.T) {
+	s, _ := newTestService(t)
+	out := filepath.Join(t.TempDir(), "export.yaml")
+	if _, err := s.ExportCollection(out, "", false); err != nil {
+		t.Fatalf("ExportCollection(yaml): %v", err)
+	}
+	mf, err := importexport.ImportManifestAny(out)
+	if err != nil {
+		t.Fatalf("ImportManifestAny: %v", err)
+	}
+	if len(mf.Addons) != 7 {
+		t.Errorf("manifest addons = %d, want 7", len(mf.Addons))
+	}
+}
+
+// zipEntries lists the entry names of a zip archive.
+func zipEntries(t *testing.T, path string) []string {
+	t.Helper()
+	r, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	var names []string
+	for _, f := range r.File {
+		names = append(names, f.Name)
+	}
+	return names
+}
+
+// TestServiceExportCollectionZip bundles the fixture and, only when
+// includeSavedVars, the first account's SavedVariables tree.
+func TestServiceExportCollectionZip(t *testing.T) {
+	s, _ := savedVarsTestService(t)
+	out := filepath.Join(t.TempDir(), "bundle.zip")
+	if _, err := s.ExportCollection(out, "", true); err != nil {
+		t.Fatalf("ExportCollection(zip, savedvars): %v", err)
+	}
+	entries := zipEntries(t, out)
+	hasSavedVars := false
+	for _, e := range entries {
+		if strings.HasPrefix(e, "savedvars/") {
+			hasSavedVars = true
+		}
+	}
+	if !hasSavedVars {
+		t.Errorf("zip has no savedvars/ tree: %v", entries)
+	}
+	if !slices.Contains(entries, "manifest.json") {
+		t.Errorf("zip missing manifest.json: %v", entries)
+	}
+
+	out2 := filepath.Join(t.TempDir(), "bundle2.zip")
+	if _, err := s.ExportCollection(out2, "", false); err != nil {
+		t.Fatalf("ExportCollection(zip, no savedvars): %v", err)
+	}
+	for _, e := range zipEntries(t, out2) {
+		if strings.HasPrefix(e, "savedvars/") {
+			t.Errorf("zip without includeSavedVars contains %q", e)
+		}
+	}
+}
+
+// TestServiceImportCollectionManifest installs the remote entries of a
+// JSON manifest through the catalog and skips payload-less local ones.
+func TestServiceImportCollectionManifest(t *testing.T) {
+	s, addonsDir, _, mock := newTestCatalogService(t)
+	mock.repos["acme/newaddon"] = "v1.0.0"
+	mock.zips["acme/newaddon"] = addonZipBytes(t, "NewAddon", "## Title: NewAddon\n## Version: 1.0.0\n## Interface: 30300\n")
+
+	mf := filepath.Join(t.TempDir(), "manifest.json")
+	if err := os.WriteFile(mf, []byte(`{
+		"version": 1, "name": "pve", "game_version": "wrath",
+		"addons": [
+			{"folder": "NewAddon", "provider": "github", "id": "acme/newaddon", "source": "acme/newaddon"},
+			{"folder": "LocalOnly"}
+		]
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := s.ImportCollection(mf)
+	if err != nil {
+		t.Fatalf("ImportCollection(manifest): %v", err)
+	}
+	if !slices.Contains(res.Installed, "NewAddon") {
+		t.Errorf("installed = %v, want NewAddon", res.Installed)
+	}
+	if _, err := os.Stat(filepath.Join(addonsDir, "NewAddon")); err != nil {
+		t.Errorf("NewAddon not installed: %v", err)
+	}
+	if len(res.Installed) != 1 {
+		t.Errorf("installed = %v, want exactly NewAddon (local-only skipped)", res.Installed)
+	}
+}
+
+// TestServiceImportCollectionZip installs a local-only bundle zip:
+// the payload folder is extracted into the AddOns directory.
+func TestServiceImportCollectionZip(t *testing.T) {
+	s, addonsDir := newTestService(t)
+	zipPath := filepath.Join(t.TempDir(), "bundle.zip")
+	writeZip(t, zipPath, map[string]string{
+		"manifest.json":                    `{"version":1,"name":"pve","game_version":"wrath","addons":[{"folder":"LocalAddon"}]}`,
+		"addons/LocalAddon/LocalAddon.toc": "## Title: LocalAddon\n## Version: 1.0.0\n",
+	})
+
+	res, err := s.ImportCollection(zipPath)
+	if err != nil {
+		t.Fatalf("ImportCollection(zip): %v", err)
+	}
+	if !slices.Contains(res.Installed, "LocalAddon") {
+		t.Errorf("installed = %v, want LocalAddon", res.Installed)
+	}
+	if _, err := os.Stat(filepath.Join(addonsDir, "LocalAddon")); err != nil {
+		t.Errorf("LocalAddon not extracted: %v", err)
+	}
+}
+
+// TestServiceImportCollectionURL fetches a GitHub repo list and
+// installs every entry through the mock provider.
+func TestServiceImportCollectionURL(t *testing.T) {
+	s, addonsDir, _, mock := newTestCatalogService(t)
+	mock.repos["acme/newaddon"] = "v1.0.0"
+	mock.zips["acme/newaddon"] = addonZipBytes(t, "NewAddon", "## Title: NewAddon\n## Version: 1.0.0\n## Interface: 30300\n")
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "acme/newaddon\n# comment\n\n")
+	}))
+	defer ts.Close()
+
+	res, err := s.ImportCollection(ts.URL)
+	if err != nil {
+		t.Fatalf("ImportCollection(url): %v", err)
+	}
+	if !slices.Contains(res.Installed, "NewAddon") {
+		t.Errorf("installed = %v, want NewAddon", res.Installed)
+	}
+	if _, err := os.Stat(filepath.Join(addonsDir, "NewAddon")); err != nil {
+		t.Errorf("NewAddon not installed from list: %v", err)
+	}
+}
+
+// TestServiceImportCollectionUnsupported rejects arguments that are
+// neither an existing manifest/bundle nor an http(s) URL.
+func TestServiceImportCollectionUnsupported(t *testing.T) {
+	s, _ := newTestService(t)
+	_, err := s.ImportCollection(filepath.Join(t.TempDir(), "list.txt"))
+	if err == nil {
+		t.Fatal("unsupported import argument should error")
+	}
+}
+
+// TestServiceConfigRoundTrip maps every persisted field into the view.
+func TestServiceConfigRoundTrip(t *testing.T) {
+	s, addonsDir := newTestService(t)
+	root := filepath.Dir(filepath.Dir(addonsDir))
+	cv, err := s.Config()
+	if err != nil {
+		t.Fatalf("Config: %v", err)
+	}
+	if cv.WoWPath != root {
+		t.Errorf("wow_path = %q, want %q", cv.WoWPath, root)
+	}
+	if cv.Profile != "wrath" || cv.Theme != "dark" {
+		t.Errorf("profile/theme = %q/%q, want wrath/dark", cv.Profile, cv.Theme)
+	}
+	if !cv.AutoBackup || !cv.Confirmations {
+		t.Errorf("auto_backup/confirmations = %v/%v, want true (config defaults)", cv.AutoBackup, cv.Confirmations)
+	}
+}
+
+// TestServiceSetConfigKey persists every supported key, including the
+// auto_backup alias, and wow_path validates the install path.
+func TestServiceSetConfigKey(t *testing.T) {
+	s, addonsDir := newTestService(t)
+	root := filepath.Dir(filepath.Dir(addonsDir))
+
+	cases := []struct{ key, value string }{
+		{"flavor", "classic"},
+		{"theme", "light"},
+		{"profile", "tbc"},
+		{"autobackup", "true"},
+		{"auto_backup", "false"},
+		{"confirmations", "true"},
+		{"backups_dir", filepath.Join(t.TempDir(), "backups")},
+		{"curseforge_api_key", "abc123"},
+		{"collection", "pve"},
+		{"collections_dir", filepath.Join(t.TempDir(), "cols")},
+		{"wow_path", root},
+	}
+	for _, c := range cases {
+		if err := s.SetConfigKey(c.key, c.value); err != nil {
+			t.Fatalf("SetConfigKey(%q, %q): %v", c.key, c.value, err)
+		}
+	}
+
+	cv, err := s.Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cv.WoWPath != root || cv.Flavor != "classic" || cv.Profile != "tbc" ||
+		cv.Theme != "light" || cv.AutoBackup || !cv.Confirmations ||
+		cv.BackupsDir == "" || cv.CurseForgeAPIKey != "abc123" ||
+		cv.Collection != "pve" || cv.CollectionsDir == "" {
+		t.Errorf("config view = %+v", cv)
+	}
+}
+
+// TestServiceSetConfigKeyValidation rejects bad values with the CLI's
+// error texts.
+func TestServiceSetConfigKeyValidation(t *testing.T) {
+	s, _ := newTestService(t)
+	bad := []struct{ key, value, wantErr string }{
+		{"theme", "blue", "theme must be dark or light"},
+		{"profile", "nope", "unknown profile"},
+		{"autobackup", "maybe", "must be true or false"},
+		{"auto_backup", "maybe", "must be true or false"},
+		{"confirmations", "maybe", "must be true or false"},
+		{"wow_path", filepath.Join(t.TempDir(), "missing"), "path does not exist"},
+		{"unknown", "x", "unknown key"},
+	}
+	for _, c := range bad {
+		err := s.SetConfigKey(c.key, c.value)
+		if err == nil {
+			t.Errorf("SetConfigKey(%q, %q) should error", c.key, c.value)
+			continue
+		}
+		if !strings.Contains(err.Error(), c.wantErr) {
+			t.Errorf("SetConfigKey(%q, %q) err = %q, want containing %q", c.key, c.value, err.Error(), c.wantErr)
+		}
 	}
 }

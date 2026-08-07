@@ -10,11 +10,15 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,10 +27,12 @@ import (
 	"github.com/wowfix/wowfix/internal/config"
 	"github.com/wowfix/wowfix/internal/detector"
 	"github.com/wowfix/wowfix/internal/fixer"
+	"github.com/wowfix/wowfix/internal/importexport"
 	"github.com/wowfix/wowfix/internal/installer"
 	"github.com/wowfix/wowfix/internal/logger"
 	"github.com/wowfix/wowfix/internal/models"
 	"github.com/wowfix/wowfix/internal/profiles"
+	"github.com/wowfix/wowfix/internal/savedvars"
 	"github.com/wowfix/wowfix/internal/scanner"
 	"github.com/wowfix/wowfix/internal/utils"
 	"github.com/wowfix/wowfix/internal/validator"
@@ -713,6 +719,111 @@ type CuratedResult struct {
 	Label     string         `json:"label"`
 	ProfileID string         `json:"profile_id"`
 	Addons    []CuratedAddon `json:"addons"`
+}
+
+// InfoResult is the resolved detail view of one addon: either a single
+// addon or, for an ambiguous bare-name search, the candidate matches
+// the frontend asks the user to disambiguate.
+type InfoResult struct {
+	Provider      string      `json:"provider"`
+	ID            string      `json:"id"`
+	Name          string      `json:"name"`
+	Author        string      `json:"author"`
+	Summary       string      `json:"summary"`
+	LatestVersion string      `json:"latest_version"`
+	Homepage      string      `json:"homepage"`
+	GameVersion   string      `json:"game_version"`
+	UpdatedAt     time.Time   `json:"updated_at"`
+	ReleaseNotes  string      `json:"release_notes,omitempty"`
+	Matches       []SearchHit `json:"matches,omitempty"`
+}
+
+// ProviderInfo is one catalog provider's name and honest caveat.
+type ProviderInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// DoctorCheck is one line of the environment report, with a machine
+// status for the UI to color.
+type DoctorCheck struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"` // "ok" | "warn" | "error" | "info"
+	Message string `json:"message"`
+}
+
+// DoctorReport is the full environment report.
+type DoctorReport struct {
+	Checks []DoctorCheck `json:"checks"`
+}
+
+// SavedVarsListResult is one account's SavedVariables file list.
+type SavedVarsListResult struct {
+	WtfRoot string   `json:"wtf_root"`
+	Account string   `json:"account"`
+	Files   []string `json:"files"`
+}
+
+// SavedVarsBackupResult is the outcome of backing up one account.
+type SavedVarsBackupResult struct {
+	Path    string `json:"path"`
+	Account string `json:"account"`
+}
+
+// SavedVarsMigrateResult is the outcome of copying SavedVariables
+// between two accounts of the same installation.
+type SavedVarsMigrateResult struct {
+	Copied []string `json:"copied"`
+}
+
+// BackupResult is the outcome of a manual snapshot.
+type BackupResult struct {
+	ID string `json:"id"`
+}
+
+// BackupInfo is one snapshot in the backup history list.
+type BackupInfo struct {
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	Reason    string    `json:"reason"`
+	Folders   int       `json:"folders"`
+}
+
+// ListBackupsResult is the full snapshot history.
+type ListBackupsResult struct {
+	Snapshots []BackupInfo `json:"snapshots"`
+}
+
+// RestoreBackupResult is the outcome of restoring one snapshot.
+type RestoreBackupResult struct {
+	Restored []string `json:"restored"`
+	Skipped  []string `json:"skipped"`
+}
+
+// ExportResult is the outcome of exporting a collection.
+type ExportResult struct {
+	Out        string `json:"out"`
+	Addons     int    `json:"addons"`
+	Collection string `json:"collection"`
+}
+
+// ImportResult is the outcome of importing a collection.
+type ImportResult struct {
+	Installed []string `json:"installed"`
+}
+
+// ConfigView is the full persisted configuration.
+type ConfigView struct {
+	WoWPath          string `json:"wow_path"`
+	Flavor           string `json:"flavor"`
+	Profile          string `json:"profile"`
+	Collection       string `json:"collection"`
+	Theme            string `json:"theme"`
+	AutoBackup       bool   `json:"auto_backup"`
+	Confirmations    bool   `json:"confirmations"`
+	BackupsDir       string `json:"backups_dir"`
+	CurseForgeAPIKey string `json:"curseforge_api_key"`
+	CollectionsDir   string `json:"collections_dir"`
 }
 
 // DTO conversions -----------------------------------------------------------
@@ -1947,4 +2058,835 @@ func (s *Service) syncInstalls(e *env, installs []detector.Installation, allowRe
 		out.TotalFailed += row.Failed
 	}
 	return out
+}
+
+// wtfRoot returns the WTF directory of an installation: the game root
+// plus the flavor subfolder plus WTF (mirrors cmd/wowfix).
+func wtfRoot(root, flavor string) string {
+	return filepath.Join(root, flavor, "WTF")
+}
+
+// collectionsDirFor resolves where collection files live: the config
+// override, else <config dir>/collections (mirrors cmd/wowfix's
+// collectionsDir).
+func (s *Service) collectionsDirFor(e *env) string {
+	if e.cfg.CollectionsDir != "" {
+		return e.cfg.CollectionsDir
+	}
+	return filepath.Join(s.store.Dir(), "collections")
+}
+
+// savedVarsManager returns a savedvars.Manager rooted at the install's
+// WTF directory.
+func (s *Service) savedVarsManager(e *env) *savedvars.Manager {
+	return savedvars.New(wtfRoot(e.install.Root, e.install.Flavor), s.log)
+}
+
+// pickAccount resolves the account for a savedvars call: the requested
+// one, or the first existing one (mirrors cmd/wowfix).
+func pickAccount(m *savedvars.Manager, requested string) (string, error) {
+	if requested != "" {
+		return requested, nil
+	}
+	accts := m.Accounts()
+	if len(accts) == 0 {
+		return "", fmt.Errorf("no accounts found under %s/Account", m.Root)
+	}
+	return accts[0], nil
+}
+
+// profileIDs returns every supported profile id, for error messages.
+func profileIDs() []string {
+	ids := make([]string, 0, len(models.Profiles))
+	for _, p := range models.Profiles {
+		ids = append(ids, p.ID)
+	}
+	return ids
+}
+
+// Source classifier and release-note helpers --------------------------------
+
+var (
+	infoWowInterfaceIDRe = regexp.MustCompile(`(?i)info(\d+)(?:-|\.)`)
+	infoTukuiIDRe        = regexp.MustCompile(`(?i)/downloads?/([^/?#]+)`)
+
+	mdLinkRe    = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
+	mdCodeRe    = regexp.MustCompile("`([^`]*)`")
+	mdBoldRe    = regexp.MustCompile(`\*\*([^*]*)\*\*`)
+	mdItalicRe  = regexp.MustCompile(`\*([^*]*)\*`)
+	mdHeadingRe = regexp.MustCompile(`(?m)^\s*#{1,6}\s*`)
+)
+
+// classifySource classifies an addon argument into a provider name and
+// provider-scoped id, mirroring the catalog's parseSource (which is
+// unexported) so `info` needs no catalog API change. It additionally
+// accepts a scheme-less "github.com/owner/repo" form, like the CLI.
+func classifySource(source string) (string, string, error) {
+	s := strings.TrimSpace(source)
+	if s == "" {
+		return "", "", fmt.Errorf("empty addon argument")
+	}
+	lower := strings.ToLower(s)
+	switch {
+	case strings.Contains(lower, "github.com"):
+		owner, repo, err := infoGithubPath(s)
+		if err != nil {
+			return "", "", err
+		}
+		return catalog.ProviderGitHub, owner + "/" + repo, nil
+	case strings.Contains(lower, "curseforge.com"):
+		slug, err := infoCurseSlug(s)
+		if err != nil {
+			return "", "", err
+		}
+		return catalog.ProviderCurseForge, slug, nil
+	case strings.Contains(lower, "wowinterface.com"):
+		m := infoWowInterfaceIDRe.FindStringSubmatch(s)
+		if m == nil {
+			return "", "", fmt.Errorf("cannot parse WowInterface URL %q (expected .../info<id>-<slug>.html)", source)
+		}
+		return catalog.ProviderWowInterface, m[1], nil
+	case strings.Contains(lower, "tukui.org"):
+		m := infoTukuiIDRe.FindStringSubmatch(s)
+		if m == nil {
+			return "", "", fmt.Errorf("cannot parse Tukui URL %q (expected .../downloads/<id>)", source)
+		}
+		return catalog.ProviderTukui, m[1], nil
+	case strings.Contains(s, "/"):
+		owner, repo, err := infoGithubPath(s)
+		if err != nil {
+			return "", "", err
+		}
+		return catalog.ProviderGitHub, owner + "/" + repo, nil
+	default:
+		return "", "", fmt.Errorf("unknown addon %q", source)
+	}
+}
+
+// infoGithubPath extracts owner and repo from "owner/repo" or a
+// github.com URL, ignoring any trailing segments.
+func infoGithubPath(s string) (owner, repo string, err error) {
+	u := s
+	if strings.Contains(strings.ToLower(s), "github.com") {
+		parsed, err := url.Parse(s)
+		if err != nil {
+			return "", "", fmt.Errorf("invalid GitHub URL %q: %w", s, err)
+		}
+		u = parsed.Path
+	}
+	u = strings.Trim(u, "/")
+	parts := strings.Split(u, "/")
+	if len(parts) > 1 && (strings.EqualFold(parts[0], "github.com") || strings.EqualFold(parts[0], "www.github.com")) {
+		parts = parts[1:]
+	}
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("GitHub source %q must be owner/repo", s)
+	}
+	return parts[0], parts[1], nil
+}
+
+// infoCurseSlug extracts the addon slug from a CurseForge URL path
+// such as /wow/addons/<slug>.
+func infoCurseSlug(s string) (string, error) {
+	parsed, err := url.Parse(s)
+	if err != nil {
+		return "", fmt.Errorf("invalid CurseForge URL %q: %w", s, err)
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	for i, p := range parts {
+		if strings.EqualFold(p, "addons") && i+1 < len(parts) && parts[i+1] != "" {
+			return parts[i+1], nil
+		}
+	}
+	return "", fmt.Errorf("cannot parse CurseForge URL %q (expected .../wow/addons/<slug>)", s)
+}
+
+// infoReleaseNotes fetches the latest GitHub release notes for the
+// addon's repository, stripped of markdown formatting. Any failure
+// (network, rate limit, no release) returns an error; callers degrade
+// to an empty string instead of failing the call. The service's
+// injected http client is used when set so tests can mock GitHub.
+func (s *Service) infoReleaseNotes(addon *catalog.Addon) (string, error) {
+	owner, repo, ok := strings.Cut(addon.ID, "/")
+	if !ok || owner == "" || repo == "" || strings.Contains(repo, "/") {
+		return "", fmt.Errorf("github: not an owner/repo id")
+	}
+	u := "https://api.github.com/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/releases/latest"
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	client := s.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("github: unexpected status %d", resp.StatusCode)
+	}
+	var rel struct {
+		Body string `json:"body"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return "", err
+	}
+	return stripMarkdown(rel.Body), nil
+}
+
+// stripMarkdown reduces release-note markdown to plain text: headings,
+// bold/italic emphasis, inline code and links keep their content while
+// the syntax is dropped, and blank lines are collapsed.
+func stripMarkdown(s string) string {
+	s = mdLinkRe.ReplaceAllString(s, "$1")
+	s = mdCodeRe.ReplaceAllString(s, "$1")
+	s = mdBoldRe.ReplaceAllString(s, "$1")
+	s = mdItalicRe.ReplaceAllString(s, "$1")
+	s = mdHeadingRe.ReplaceAllString(s, "")
+	lines := strings.Split(s, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			if len(out) > 0 && out[len(out)-1] != "" {
+				out = append(out, "")
+			}
+			continue
+		}
+		out = append(out, line)
+	}
+	for len(out) > 0 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
+	}
+	return strings.Join(out, "\n")
+}
+
+// AddonInfo resolves one addon from a provider source ("owner/repo" or
+// a provider URL) or a bare-name search, mirroring the CLI's `info`
+// command. A bare name with several matches returns them in Matches
+// with a nil error so the frontend can disambiguate; exactly one match
+// resolves it. ReleaseNotes is filled for GitHub addons only and is
+// best-effort (empty when they cannot be fetched).
+func (s *Service) AddonInfo(arg string) (InfoResult, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return InfoResult{}, err
+	}
+	cat, err := s.catalogFor(e)
+	if err != nil {
+		return InfoResult{}, err
+	}
+	ctx := context.Background()
+
+	var addon *catalog.Addon
+	if strings.Contains(arg, "/") {
+		providerName, id, err := classifySource(arg)
+		if err != nil {
+			return InfoResult{}, err
+		}
+		prov, ok := cat.Provider(providerName)
+		if !ok {
+			return InfoResult{}, fmt.Errorf("provider %q is not available", providerName)
+		}
+		addon, err = prov.Resolve(ctx, id)
+		if err != nil {
+			return InfoResult{}, fmt.Errorf("cannot resolve %q: %w", arg, err)
+		}
+	} else {
+		matches, _ := cat.Search(ctx, arg, 5)
+		switch {
+		case len(matches) == 0:
+			return InfoResult{}, fmt.Errorf("no matches for %q", arg)
+		case len(matches) > 1:
+			out := InfoResult{Matches: []SearchHit{}}
+			for _, m := range matches {
+				out.Matches = append(out.Matches, SearchHit{
+					Provider:      m.Provider,
+					Name:          m.Name,
+					Author:        m.Author,
+					Summary:       m.Summary,
+					LatestVersion: m.LatestVersion,
+					GameVersion:   m.GameVersion,
+					ID:            m.ID,
+					Homepage:      m.Homepage,
+				})
+			}
+			return out, nil
+		default:
+			addon = matches[0]
+		}
+	}
+	return s.toInfoResult(addon), nil
+}
+
+// toInfoResult maps one resolved addon to the detail DTO.
+func (s *Service) toInfoResult(addon *catalog.Addon) InfoResult {
+	out := InfoResult{
+		Provider:      addon.Provider,
+		ID:            addon.ID,
+		Name:          addon.Name,
+		Author:        addon.Author,
+		Summary:       addon.Summary,
+		LatestVersion: addon.LatestVersion,
+		Homepage:      addon.Homepage,
+		GameVersion:   addon.GameVersion,
+		UpdatedAt:     addon.UpdatedAt,
+	}
+	if addon.Provider == catalog.ProviderGitHub {
+		if notes, err := s.infoReleaseNotes(addon); err == nil && strings.TrimSpace(notes) != "" {
+			out.ReleaseNotes = notes
+		}
+	}
+	return out
+}
+
+// Sources lists the catalog providers with their caveats, matching the
+// CLI's `wowfix sources` output exactly. No install is required.
+func (s *Service) Sources() ([]ProviderInfo, error) {
+	return []ProviderInfo{
+		{Name: "github", Description: "GitHub releases API — unauthenticated, ~60 requests/hour"},
+		{Name: "curseforge", Description: "modern Core API with WOWFIX_CURSEFORGE_API_KEY, else deprecated legacy endpoint"},
+		{Name: "wowinterface", Description: "MMOUI filelist JSON"},
+		{Name: "tukui", Description: "tukui.org API"},
+	}, nil
+}
+
+// Doctor runs the environment report the CLI's `wowfix doctor` prints,
+// mapped to one DoctorCheck per output line. A single failing check
+// never aborts the report.
+func (s *Service) Doctor() (DoctorReport, error) {
+	e, err := s.env()
+	if err != nil {
+		return DoctorReport{}, err
+	}
+	var checks []DoctorCheck
+	add := func(name, status, message string) {
+		checks = append(checks, DoctorCheck{Name: name, Status: status, Message: message})
+	}
+
+	add("config", "info", e.store.Path())
+
+	if p := models.ProfileByID(e.cfg.Profile); p == nil {
+		add("profile", "error", fmt.Sprintf("unknown profile %q (valid: %s)", e.cfg.Profile, strings.Join(profileIDs(), ", ")))
+	} else {
+		add("profile", "ok", p.ID)
+	}
+	switch e.cfg.Theme {
+	case "dark", "light":
+		add("theme", "ok", e.cfg.Theme)
+	default:
+		add("theme", "error", fmt.Sprintf("must be dark or light (got %q)", e.cfg.Theme))
+	}
+	if e.cfg.Collection == "" {
+		add("collection", "ok", "(none set)")
+	} else if utils.Exists(filepath.Join(s.collectionsDirFor(e), e.cfg.Collection+".json")) {
+		add("collection", "ok", e.cfg.Collection)
+	} else {
+		add("collection", "error", fmt.Sprintf("%q not found in %s", e.cfg.Collection, s.collectionsDirFor(e)))
+	}
+
+	if e.install == nil {
+		add("install", "error", "none found (use --path or set wow_path in config)")
+	} else {
+		conf := e.install.Confidence
+		if conf == "" {
+			conf = "unknown"
+		}
+		add("install", "ok", e.install.AddonsPath)
+		add("flavor", "info", fmt.Sprintf("%q (confidence %s)", e.install.Flavor, conf))
+		if e.install.Exe != "" {
+			add("exe", "info", fmt.Sprintf("%s (version %s)", e.install.Exe, e.install.Version))
+		}
+		if err := utils.IsWritable(e.install.AddonsPath); err != nil {
+			add("permissions", "error", fmt.Sprintf("AddOns directory is not writable: %v", err))
+		} else {
+			add("permissions", "ok", "AddOns directory is writable")
+		}
+		if res, err := s.scan(e); err == nil {
+			total, problems, errs := res.Stats()
+			add("scan", "info", fmt.Sprintf("%d addon(s): %d problem(s), %d error(s).", total, problems, errs))
+		} else {
+			add("scan", "warn", fmt.Sprintf("scan failed: %v", err))
+		}
+	}
+
+	if infos, err := backup.New(s.backupRoot(e), s.log).List(); err == nil {
+		add("backups", "info", fmt.Sprintf("%d snapshot(s)", len(infos)))
+	} else {
+		add("backups", "warn", err.Error())
+	}
+
+	trashDir := filepath.Join(e.store.Dir(), "trash")
+	if err := utils.EnsureDir(trashDir); err != nil {
+		add("trash", "error", err.Error())
+	} else if err := utils.IsWritable(trashDir); err != nil {
+		add("trash", "error", fmt.Sprintf("not writable (%v)", err))
+	} else {
+		add("trash", "ok", trashDir+" (writable)")
+	}
+
+	regPath := s.registryPath
+	if regPath == "" {
+		regPath, err = catalog.DefaultPath()
+		if err != nil {
+			add("registry", "error", err.Error())
+			regPath = ""
+		}
+	}
+	if regPath != "" {
+		if !utils.Exists(regPath) {
+			add("registry", "info", "none (addons installed via catalog will appear here)")
+		} else if reg, err := catalog.NewRegistry(regPath); err != nil {
+			add("registry", "error", err.Error())
+		} else {
+			add("registry", "ok", fmt.Sprintf("OK (%d entries)", len(reg.Entries())))
+		}
+	}
+
+	colsDir := s.collectionsDirFor(e)
+	switch {
+	case !utils.IsDir(colsDir):
+		if e.cfg.CollectionsDir != "" {
+			add("collections", "warn", fmt.Sprintf("not configured (%s does not exist)", colsDir))
+		} else {
+			add("collections", "warn", fmt.Sprintf("not configured (%s)", colsDir))
+		}
+	default:
+		if err := utils.IsWritable(colsDir); err != nil {
+			add("collections", "error", fmt.Sprintf("%s (not writable: %v)", colsDir, err))
+		} else {
+			add("collections", "ok", fmt.Sprintf("%s (writable)", colsDir))
+		}
+	}
+
+	if e.install == nil {
+		add("savedvars", "error", "WTF not found")
+	} else {
+		wtf := wtfRoot(e.install.Root, e.install.Flavor)
+		if !utils.IsDir(wtf) {
+			add("savedvars", "error", "WTF not found")
+		} else {
+			add("savedvars", "info", fmt.Sprintf("%d account(s)", len(savedvars.New(wtf, nil).Accounts())))
+		}
+	}
+
+	if e.cfg.Theme != "dark" && e.cfg.Theme != "light" {
+		add("warning", "warn", "theme must be dark or light")
+	}
+	return DoctorReport{Checks: checks}, nil
+}
+
+// SavedVarsAccounts lists the account directory names under the active
+// install's WTF/Account folder.
+func (s *Service) SavedVarsAccounts() ([]string, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return nil, err
+	}
+	return s.savedVarsManager(e).Accounts(), nil
+}
+
+// SavedVarsList lists one account's SavedVariables files. An empty
+// account picks the first existing one, mirroring the CLI.
+func (s *Service) SavedVarsList(account string) (SavedVarsListResult, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return SavedVarsListResult{}, err
+	}
+	m := s.savedVarsManager(e)
+	acct, err := pickAccount(m, account)
+	if err != nil {
+		return SavedVarsListResult{}, err
+	}
+	files, err := m.List(acct)
+	if err != nil {
+		return SavedVarsListResult{}, err
+	}
+	return SavedVarsListResult{WtfRoot: m.Root, Account: acct, Files: files}, nil
+}
+
+// SavedVarsBackup backs up one account's SavedVariables to
+// <wtf>/savedvars-backups, the CLI default destination.
+func (s *Service) SavedVarsBackup(account string) (SavedVarsBackupResult, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return SavedVarsBackupResult{}, err
+	}
+	m := s.savedVarsManager(e)
+	acct, err := pickAccount(m, account)
+	if err != nil {
+		return SavedVarsBackupResult{}, err
+	}
+	path, err := m.Backup(acct, filepath.Join(m.Root, "savedvars-backups"))
+	if err != nil {
+		return SavedVarsBackupResult{}, err
+	}
+	return SavedVarsBackupResult{Path: path, Account: acct}, nil
+}
+
+// SavedVarsRestore replaces an account's SavedVariables with the
+// contents of a backup path. Destructive by policy: the frontend
+// dialog is the confirmation gate, so there is no bool parameter.
+func (s *Service) SavedVarsRestore(account, backupPath string) error {
+	e, err := s.requireInstall()
+	if err != nil {
+		return err
+	}
+	m := s.savedVarsManager(e)
+	acct, err := pickAccount(m, account)
+	if err != nil {
+		return err
+	}
+	return m.Restore(acct, backupPath)
+}
+
+// SavedVarsReset deletes one addon's SavedVariables file, matched by
+// exact file stem case-insensitively. Destructive by policy; the
+// frontend dialog is the confirmation gate.
+func (s *Service) SavedVarsReset(account, addon string) error {
+	e, err := s.requireInstall()
+	if err != nil {
+		return err
+	}
+	m := s.savedVarsManager(e)
+	acct, err := pickAccount(m, account)
+	if err != nil {
+		return err
+	}
+	return m.Reset(acct, addon)
+}
+
+// SavedVarsMigrate copies SavedVariables from one account to another
+// within the same WTF root. addon may be "" to copy every file.
+// Existing destination files are never overwritten.
+func (s *Service) SavedVarsMigrate(fromAccount, toAccount, addon string) (SavedVarsMigrateResult, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return SavedVarsMigrateResult{}, err
+	}
+	copied, err := s.savedVarsManager(e).Migrate(fromAccount, toAccount, addon)
+	if err != nil {
+		return SavedVarsMigrateResult{}, err
+	}
+	return SavedVarsMigrateResult{Copied: copied}, nil
+}
+
+// BackupNow snapshots every addon folder of the active install,
+// mirroring `wowfix backup`.
+func (s *Service) BackupNow() (BackupResult, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return BackupResult{}, err
+	}
+	id, err := backup.New(s.backupRoot(e), s.log).BackupDir(e.install.AddonsPath, "manual backup")
+	if err != nil {
+		return BackupResult{}, err
+	}
+	return BackupResult{ID: id}, nil
+}
+
+// ListBackups lists the snapshot history newest-first. No install is
+// required (mirrors `wowfix restore` with no argument). The folder
+// count is read from each snapshot's manifest, best-effort (0 when the
+// manifest is unreadable).
+func (s *Service) ListBackups() (ListBackupsResult, error) {
+	e, err := s.env()
+	if err != nil {
+		return ListBackupsResult{}, err
+	}
+	infos, err := backup.New(s.backupRoot(e), s.log).List()
+	if err != nil {
+		return ListBackupsResult{}, err
+	}
+	out := ListBackupsResult{Snapshots: []BackupInfo{}}
+	for _, in := range infos {
+		out.Snapshots = append(out.Snapshots, BackupInfo{
+			ID:        in.ID,
+			CreatedAt: in.CreatedAt,
+			Reason:    in.Reason,
+			Folders:   backupFolderCount(in.Path),
+		})
+	}
+	return out, nil
+}
+
+// backupFolderCount returns the manifest entry count of a snapshot
+// directory, or 0 when the manifest cannot be read.
+func backupFolderCount(dir string) int {
+	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		return 0
+	}
+	var mf backup.Manifest
+	if err := json.Unmarshal(data, &mf); err != nil {
+		return 0
+	}
+	return len(mf.Entries)
+}
+
+// RestoreBackup restores one snapshot. allowReplace stands in for the
+// user's confirmation of replacing existing folders (mirrors
+// `wowfix restore <id>` with --yes). No install is required.
+func (s *Service) RestoreBackup(id string, allowReplace bool) (RestoreBackupResult, error) {
+	e, err := s.env()
+	if err != nil {
+		return RestoreBackupResult{}, err
+	}
+	restored, skipped, err := backup.New(s.backupRoot(e), s.log).Restore(id, func(string) bool { return allowReplace })
+	if err != nil {
+		return RestoreBackupResult{}, err
+	}
+	return RestoreBackupResult{Restored: restored, Skipped: skipped}, nil
+}
+
+// ExportCollection writes the active install's addon set to outPath as
+// a JSON manifest, YAML manifest or bundle ZIP, dispatching on the
+// extension exactly like the CLI. An empty collectionID exports the
+// current on-disk state; otherwise the named collection's state. ZIP
+// exports bundle SavedVariables only when includeSavedVars.
+func (s *Service) ExportCollection(outPath, collectionID string, includeSavedVars bool) (ExportResult, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return ExportResult{}, err
+	}
+	addons, name, err := s.buildManifestAddons(e, collectionID)
+	if err != nil {
+		return ExportResult{}, err
+	}
+	switch strings.ToLower(filepath.Ext(outPath)) {
+	case ".json":
+		if err := importexport.ExportManifest(name, e.cfg.Profile, addons, outPath); err != nil {
+			return ExportResult{}, err
+		}
+	case ".yaml", ".yml":
+		if err := importexport.ExportManifestYAML(name, e.cfg.Profile, addons, outPath); err != nil {
+			return ExportResult{}, err
+		}
+	case ".zip":
+		svDir := ""
+		if includeSavedVars {
+			svDir = s.firstSavedVarsDir(e)
+		}
+		if err := importexport.ExportZip(name, e.cfg.Profile, addons, e.install.AddonsPath, svDir, outPath); err != nil {
+			return ExportResult{}, err
+		}
+	default:
+		return ExportResult{}, fmt.Errorf("export requires a .json or .zip output path")
+	}
+	return ExportResult{Out: outPath, Addons: len(addons), Collection: e.cfg.Collection}, nil
+}
+
+// buildManifestAddons assembles the manifest entries for an export:
+// either the named collection's addons or the current on-disk scan
+// (skipping .disabled and dot-dirs), enriched with registry source
+// information when tracked (mirrors the CLI).
+func (s *Service) buildManifestAddons(e *env, collectionID string) ([]importexport.ManifestAddon, string, error) {
+	tracked := s.registryEntries(e)
+	enrich := func(folder string) importexport.ManifestAddon {
+		a := importexport.ManifestAddon{Folder: folder}
+		if entry, ok := tracked[strings.ToLower(folder)]; ok && entry.Provider != "" {
+			a.Provider = entry.Provider
+			a.ID = entry.ID
+			a.Source = entry.Source
+			a.Version = entry.Version
+		}
+		return a
+	}
+
+	if collectionID != "" {
+		m, err := s.profilesFor(e)
+		if err != nil {
+			return nil, "", err
+		}
+		c, err := m.Get(collectionID)
+		if err != nil {
+			return nil, "", err
+		}
+		addons := make([]importexport.ManifestAddon, 0, len(c.Addons))
+		for _, st := range c.Addons {
+			addons = append(addons, enrich(st.Folder))
+		}
+		return addons, c.Name, nil
+	}
+
+	entries, err := os.ReadDir(e.install.AddonsPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("cannot read AddOns directory: %w", err)
+	}
+	var addons []importexport.ManifestAddon
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		folder := entry.Name()
+		if strings.HasSuffix(strings.ToLower(folder), ".disabled") {
+			continue
+		}
+		addons = append(addons, enrich(folder))
+	}
+	return addons, "wowfix-export", nil
+}
+
+// firstSavedVarsDir returns the first account's SavedVariables
+// directory, or "" when none exists.
+func (s *Service) firstSavedVarsDir(e *env) string {
+	wtf := wtfRoot(e.install.Root, e.install.Flavor)
+	m := savedvars.New(wtf, s.log)
+	accts := m.Accounts()
+	if len(accts) == 0 {
+		return ""
+	}
+	dir := filepath.Join(wtf, "Account", accts[0], "SavedVariables")
+	if !utils.IsDir(dir) {
+		return ""
+	}
+	return dir
+}
+
+// ImportCollection installs addons from a manifest (JSON/YAML), a
+// bundle ZIP or a GitHub repo-list URL, dispatching on the argument
+// exactly like the CLI. Importing is gated by the frontend dialog; the
+// method itself never prompts.
+func (s *Service) ImportCollection(pathOrURL string) (ImportResult, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return ImportResult{}, err
+	}
+	cat, err := s.catalogFor(e)
+	if err != nil {
+		return ImportResult{}, err
+	}
+
+	var installed []string
+	switch {
+	case utils.Exists(pathOrURL) && strings.EqualFold(filepath.Ext(pathOrURL), ".zip"):
+		installed, err = importexport.ImportZip(pathOrURL, e.install.AddonsPath,
+			wtfRoot(e.install.Root, e.install.Flavor), cat, nil)
+
+	case utils.Exists(pathOrURL) && (strings.EqualFold(filepath.Ext(pathOrURL), ".json") ||
+		strings.EqualFold(filepath.Ext(pathOrURL), ".yaml") || strings.EqualFold(filepath.Ext(pathOrURL), ".yml")):
+		var mf *importexport.Manifest
+		mf, err = importexport.ImportManifestAny(pathOrURL)
+		if err != nil {
+			return ImportResult{}, err
+		}
+		installed, err = s.installManifest(e, cat, mf)
+
+	case strings.HasPrefix(pathOrURL, "http://") || strings.HasPrefix(pathOrURL, "https://"):
+		installed, err = importexport.ImportGitHubList(pathOrURL, e.install.AddonsPath, cat, nil)
+
+	default:
+		return ImportResult{}, fmt.Errorf("import requires an existing .json/.yaml/.yml or .zip file, or an http(s) URL")
+	}
+	if err != nil {
+		return ImportResult{}, err
+	}
+	return ImportResult{Installed: installed}, nil
+}
+
+// installManifest installs a parsed manifest: remote entries through
+// the catalog, local entries by presence check (a bare manifest has no
+// addon payload to copy). Mirrors the CLI.
+func (s *Service) installManifest(e *env, cat *catalog.Catalog, mf *importexport.Manifest) ([]string, error) {
+	var installed []string
+	for _, a := range mf.Addons {
+		switch {
+		case a.Provider != "" || a.Source != "":
+			source := a.Source
+			if source == "" {
+				source = a.ID
+			}
+			names, err := cat.InstallFromSource(context.Background(), source, e.install.AddonsPath, nil)
+			if err != nil {
+				return installed, fmt.Errorf("install %q: %w", a.Folder, err)
+			}
+			installed = append(installed, names...)
+		default:
+			// Local-only entry: a bare manifest has no payload, so the
+			// addon either is already installed or is not part of the
+			// import. Presence is only checked, mirroring the CLI.
+			_ = utils.IsDir(filepath.Join(e.install.AddonsPath, a.Folder))
+		}
+	}
+	return installed, nil
+}
+
+// Config returns the full persisted configuration as a view DTO.
+func (s *Service) Config() (ConfigView, error) {
+	cfg, err := s.store.Load()
+	if err != nil {
+		return ConfigView{}, err
+	}
+	return ConfigView{
+		WoWPath:          cfg.WoWPath,
+		Flavor:           cfg.Flavor,
+		Profile:          cfg.Profile,
+		Collection:       cfg.Collection,
+		Theme:            cfg.Theme,
+		AutoBackup:       cfg.AutoBackup,
+		Confirmations:    cfg.Confirmations,
+		BackupsDir:       cfg.BackupsDir,
+		CurseForgeAPIKey: cfg.CurseForgeAPIKey,
+		CollectionsDir:   cfg.CollectionsDir,
+	}, nil
+}
+
+const configKeysHelp = "keys: wow_path, flavor, profile, theme, autobackup, confirmations, backups_dir, curseforge_api_key, collection, collections_dir"
+
+// SetConfigKey persists one configuration key with the exact
+// validation of the CLI's `wowfix config set` (mirrors setConfigValue),
+// including the "auto_backup" alias for "autobackup".
+func (s *Service) SetConfigKey(key, value string) error {
+	cfg, err := s.store.Load()
+	if err != nil {
+		return err
+	}
+	switch key {
+	case "wow_path":
+		if _, err := detector.DetectPath(value); err != nil {
+			return err
+		}
+		cfg.WoWPath = value
+	case "flavor":
+		cfg.Flavor = value
+	case "profile":
+		if models.ProfileByID(value) == nil {
+			return fmt.Errorf("unknown profile %q (valid: %s)", value, strings.Join(profileIDs(), ", "))
+		}
+		cfg.Profile = value
+	case "theme":
+		if value != "dark" && value != "light" {
+			return fmt.Errorf("theme must be dark or light")
+		}
+		cfg.Theme = value
+	case "autobackup", "auto_backup":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("autobackup must be true or false")
+		}
+		cfg.AutoBackup = b
+	case "confirmations":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("confirmations must be true or false")
+		}
+		cfg.Confirmations = b
+	case "backups_dir":
+		cfg.BackupsDir = value
+	case "curseforge_api_key":
+		cfg.CurseForgeAPIKey = value
+	case "collection":
+		cfg.Collection = value
+	case "collections_dir":
+		cfg.CollectionsDir = value
+	default:
+		return fmt.Errorf("unknown key %q\n%s", key, configKeysHelp)
+	}
+	return s.store.Save(cfg)
 }

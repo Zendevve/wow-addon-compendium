@@ -314,6 +314,133 @@ export interface SyncResult {
   total_failed: number;
 }
 
+// ---------- diagnostics (doctor) ----------
+
+export type CheckStatus = "ok" | "warn" | "error" | "info";
+
+export interface DoctorCheck {
+  name: string;
+  status: CheckStatus;
+  message: string;
+}
+
+export interface DoctorReport {
+  checks: DoctorCheck[];
+}
+
+// ---------- addon providers ----------
+
+export interface ProviderInfo {
+  name: string;
+  description: string;
+}
+
+// ---------- addon lookup (AddonInfo) ----------
+
+/** One candidate when a bare addon name is ambiguous; re-call with its id. */
+export interface InfoMatch {
+  provider: string;
+  id: string;
+  name: string;
+  summary: string;
+  homepage: string;
+}
+
+export interface InfoResult {
+  provider: string;
+  id: string;
+  name: string;
+  author: string;
+  summary: string;
+  latest_version: string;
+  homepage: string;
+  game_version: string;
+  updated_at: string;
+  release_notes?: string;
+  /** Populated when a bare name was ambiguous — the caller picks a match. */
+  matches?: InfoMatch[];
+}
+
+// ---------- saved variables ----------
+
+export interface SavedVarsListResult {
+  wtf_root: string;
+  account: string;
+  files: string[];
+}
+
+export interface SavedVarsBackupResult {
+  path: string;
+  account: string;
+}
+
+export interface SavedVarsMigrateResult {
+  copied: string[];
+}
+
+// ---------- snapshots (backups) ----------
+
+export interface BackupInfo {
+  id: string;
+  created_at: string;
+  reason: string;
+  folders: string[];
+}
+
+export interface BackupResult {
+  id: string;
+}
+
+export interface ListBackupsResult {
+  snapshots: BackupInfo[];
+}
+
+export interface RestoreBackupResult {
+  restored: string[];
+  skipped: string[];
+}
+
+// ---------- collection export / import ----------
+
+export interface ExportResult {
+  out: string;
+  addons: number;
+  collection: string;
+}
+
+export interface ImportResult {
+  installed: string[];
+}
+
+// ---------- settings ----------
+
+export interface ConfigView {
+  wow_path: string;
+  flavor: string;
+  profile: string;
+  collection: string;
+  theme: string;
+  auto_backup: boolean;
+  confirmations: boolean;
+  backups_dir: string;
+  curseforge_api_key: string;
+  collections_dir: string;
+}
+
+// ---------- offline catalog snapshot (mirrors service.go) ----------
+
+export interface SnapshotResult {
+  snapshot_json: string;
+  exported_at: string;
+  addon_count: number;
+  warnings: string[];
+}
+
+export interface SnapshotCheck {
+  updates: UpdateEntry[];
+  errors: string[];
+}
+
 /** The Service surface exposed by `window.go.service.Service`. */
 export interface Service {
   GetState(): Promise<State>;
@@ -346,17 +473,48 @@ export interface Service {
   SetCollectionAddon(id: string, folder: string, enabled: boolean): Promise<void>;
   InstallsStatus(): Promise<InstallsStatusResult>;
   SyncUpdatesToAll(allowReplace: boolean): Promise<SyncResult>;
+  AddonInfo(arg: string): Promise<InfoResult>;
+  Sources(): Promise<ProviderInfo[]>;
+  Doctor(): Promise<DoctorReport>;
+  SavedVarsAccounts(): Promise<string[]>;
+  SavedVarsList(account: string): Promise<SavedVarsListResult>;
+  SavedVarsBackup(account: string): Promise<SavedVarsBackupResult>;
+  SavedVarsRestore(account: string, backupPath: string): Promise<void>;
+  SavedVarsReset(account: string, addon: string): Promise<void>;
+  SavedVarsMigrate(
+    fromAccount: string,
+    toAccount: string,
+    addon: string,
+  ): Promise<SavedVarsMigrateResult>;
+  BackupNow(): Promise<BackupResult>;
+  ListBackups(): Promise<ListBackupsResult>;
+  RestoreBackup(id: string, allowReplace: boolean): Promise<RestoreBackupResult>;
+  ExportCollection(
+    outPath: string,
+    collectionID: string,
+    includeSavedVars: boolean,
+  ): Promise<ExportResult>;
+  ImportCollection(pathOrURL: string): Promise<ImportResult>;
+  Config(): Promise<ConfigView>;
+  SetConfigKey(key: string, value: string): Promise<void>;
+  ExportSnapshot(): Promise<SnapshotResult>;
+  CheckSnapshot(snapshotJSON: string): Promise<SnapshotCheck>;
 }
 
 export type View =
   | "setup"
   | "scan"
+  | "doctor"
   | "validate"
   | "install"
   | "updates"
   | "catalog"
   | "collections"
-  | "installs";
+  | "exportimport"
+  | "savedvars"
+  | "backups"
+  | "installs"
+  | "settings";
 
 export const DESTRUCTIVE_ACTIONS = new Set(["delete", "merge"]);
 
