@@ -19,43 +19,59 @@ import type {
 } from "./types";
 import { DESTRUCTIVE_ACTIONS } from "./types";
 import type { AppState, Actions } from "./app";
-import { icon } from "./icons";
+import { icon, type IconName } from "./icons";
 import { mountToasts, toast } from "./components/toast";
 import { mountDialog, confirmDialog } from "./components/dialog";
 import { mountSetup } from "./views/setup";
 import { mountScan } from "./views/scan";
+import { mountDoctor } from "./views/doctor";
 import { mountValidate } from "./views/validate";
 import { mountInstall } from "./views/install";
 import { mountUpdates } from "./views/updates";
 import { mountCatalog } from "./views/catalog";
 import { mountCollections } from "./views/collections";
+import { mountExportImport } from "./views/exportimport";
+import { mountSavedVars } from "./views/savedvars";
+import { mountBackups } from "./views/backups";
 import { mountInstalls } from "./views/installs";
+import { mountSettings } from "./views/settings";
 
 const appEl = document.getElementById("app")!;
 appEl.innerHTML = `
   <div class="app">
+    <aside class="sidebar" id="sidebar" aria-label="Sidebar"></aside>
     <header class="header" id="header"></header>
-    <nav class="tabbar" id="tabbar" aria-label="Views"></nav>
     <main class="main"><div class="main-inner" id="content"></div></main>
     <footer class="statusbar" id="statusbar" aria-live="polite"></footer>
   </div>`;
 
+// The CSS grid lives on the inner .app div, not on #app itself; every
+// layout-state toggle (collapse, no-sidebar) must hit the grid element.
+const grid = appEl.querySelector<HTMLElement>(".app")!;
+
+const sidebar = appEl.querySelector<HTMLElement>("#sidebar")!;
 const header = appEl.querySelector<HTMLElement>("#header")!;
-const tabbar = appEl.querySelector<HTMLElement>("#tabbar")!;
 const content = appEl.querySelector<HTMLElement>("#content")!;
 const statusbar = appEl.querySelector<HTMLElement>("#statusbar")!;
 
 mountToasts(appEl);
 mountDialog(appEl);
 
-const TABS: { view: View; label: string; glyph: string }[] = [
-  { view: "scan", label: "Scan", glyph: "list" },
-  { view: "validate", label: "Validation", glyph: "table" },
-  { view: "updates", label: "Updates", glyph: "refresh" },
-  { view: "catalog", label: "Catalog", glyph: "search" },
-  { view: "install", label: "Install", glyph: "package" },
-  { view: "collections", label: "Collections", glyph: "stack" },
-  { view: "installs", label: "Installs", glyph: "grid" },
+// Navigation model: grouped sidebar sections. Groups are a pure
+// decluttering device — order and membership are taste, not contract.
+const NAV: { view: View; label: string; glyph: IconName; group: string }[] = [
+  { view: "scan", label: "Scan", glyph: "list", group: "Overview" },
+  { view: "doctor", label: "Doctor", glyph: "radar", group: "Overview" },
+  { view: "validate", label: "Validation", glyph: "table", group: "Overview" },
+  { view: "updates", label: "Updates", glyph: "refresh", group: "Maintenance" },
+  { view: "catalog", label: "Catalog", glyph: "search", group: "Maintenance" },
+  { view: "install", label: "Install", glyph: "package", group: "Maintenance" },
+  { view: "collections", label: "Collections", glyph: "stack", group: "Data" },
+  { view: "exportimport", label: "Export / Import", glyph: "upload", group: "Data" },
+  { view: "savedvars", label: "Saved Variables", glyph: "file", group: "Data" },
+  { view: "backups", label: "Backups", glyph: "archive", group: "Data" },
+  { view: "installs", label: "Installs", glyph: "grid", group: "System" },
+  { view: "settings", label: "Settings", glyph: "edit", group: "System" },
 ];
 
 let app: AppState;
@@ -69,7 +85,7 @@ function boot(): void {
         service.Profiles(),
       ]);
       const requested = new URLSearchParams(window.location.search).get("view");
-      const allowedViews: View[] = ["scan", "validate", "install", "updates", "catalog", "collections", "installs"];
+      const allowedViews: View[] = ["scan", "doctor", "validate", "install", "updates", "catalog", "collections", "exportimport", "savedvars", "backups", "installs", "settings"];
       const initialView: View = state.has_install
         ? allowedViews.includes(requested as View)
           ? (requested as View)
@@ -86,8 +102,9 @@ function boot(): void {
         filter: "",
         mock: mockActive,
       };
+      renderSidebar();
       renderHeader();
-      renderTabs();
+      renderNav();
       renderStatus();
       mountView();
     } catch (err) {
@@ -101,7 +118,7 @@ function boot(): void {
 const actions: Actions = {
   go(view: View): void {
     app.view = view;
-    renderTabs();
+    renderNav();
     mountView();
   },
 
@@ -407,11 +424,6 @@ function renderHeader(): void {
 
   header.innerHTML = `
     <div class="header-left">
-      <span class="brand-mark">${icon("shield", 22)}</span>
-      <span class="brand-name">wowfix</span>
-      <span class="brand-ver mono">v${escapeHtml(app.state.version)}</span>
-    </div>
-    <div class="header-center">
       ${
         hasInstall
           ? `<span class="path-chip" title="${escapeAttr(app.state.addons_dir || app.state.wow_path)}">
@@ -447,39 +459,75 @@ function renderHeader(): void {
   header.querySelector("[data-setup-link]")?.addEventListener("click", () => actions.go("setup"));
 }
 
-function renderTabs(): void {
+// renderSidebar draws the brand block and the collapse toggle; the nav
+// list itself is renderNav's job so scan-badge updates never rebuild the
+// chrome around it.
+function renderSidebar(): void {
+  const collapsed = grid.classList.contains("collapsed");
+  sidebar.innerHTML = `
+    <div class="sidebar-brand">
+      ${icon("shield", 20)}
+      <span class="brand-name">wowfix</span>
+      <span class="brand-ver mono">v${escapeHtml(app.state.version)}</span>
+    </div>
+    <nav class="nav" id="nav" aria-label="Views"></nav>
+    <button class="sidebar-collapse" data-collapse aria-expanded="${!collapsed}" aria-controls="sidebar"
+      title="${collapsed ? "Expand sidebar" : "Collapse sidebar"}">
+      ${icon(collapsed ? "chevron-right" : "chevron-left", 15)}
+    </button>`;
+  sidebar.querySelector("[data-collapse]")?.addEventListener("click", () => {
+    grid.classList.toggle("collapsed");
+    renderSidebar();
+    renderNav();
+  });
+}
+
+function renderNav(): void {
   if (app.view === "setup") {
-    appEl.classList.add("no-tabs");
-    tabbar.innerHTML = "";
+    grid.classList.add("no-sidebar");
     return;
   }
-  appEl.classList.remove("no-tabs");
+  grid.classList.remove("no-sidebar");
+  const nav = sidebar.querySelector<HTMLElement>("#nav");
+  if (!nav) return;
   const problemBadge = app.scan && app.scan.stats.problems > 0 ? app.scan.stats.problems : 0;
-  tabbar.innerHTML = `
-    <div class="tabs" role="tablist" aria-label="Sections">
-      ${TABS.map(
-        (t, i) => `
-        <button class="tab${app.view === t.view ? " active" : ""}" role="tab" aria-selected="${app.view === t.view}"
-          data-tab="${i}" tabindex="${app.view === t.view ? 0 : -1}">
-          ${icon(t.glyph as never, 15)}
-          <span>${t.label}</span>
-          ${t.view === "scan" && problemBadge ? `<span class="tab-badge">${problemBadge}</span>` : ""}
-        </button>`,
-      ).join("")}
-    </div>`;
+  const groups = new Map<string, typeof NAV>();
+  for (const item of NAV) {
+    const list = groups.get(item.group) ?? [];
+    list.push(item);
+    groups.set(item.group, list);
+  }
+  nav.innerHTML = [...groups.entries()]
+    .map(
+      ([group, items]) => `
+      <div class="nav-group">
+        <span class="nav-label">${group}</span>
+        ${items
+          .map(
+            (t) => `
+          <button class="nav-item${app.view === t.view ? " active" : ""}"${app.view === t.view ? ' aria-current="page"' : ""} data-view="${t.view}">
+            ${icon(t.glyph, 17)}
+            <span class="nav-item-label">${t.label}</span>
+            ${t.view === "scan" && problemBadge ? `<span class="nav-badge">${problemBadge}</span>` : ""}
+          </button>`,
+          )
+          .join("")}
+      </div>`,
+    )
+    .join("");
 
-  const tabs = Array.from(tabbar.querySelectorAll<HTMLButtonElement>(".tab"));
-  tabs.forEach((tab, i) => {
-    tab.addEventListener("click", () => {
-      actions.go(TABS[i].view);
-      tab.focus();
+  const items = Array.from(nav.querySelectorAll<HTMLButtonElement>(".nav-item"));
+  items.forEach((btn, i) => {
+    btn.addEventListener("click", () => {
+      actions.go(btn.dataset.view as View);
+      btn.focus();
     });
-    tab.addEventListener("keydown", (e) => {
-      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    btn.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
       e.preventDefault();
-      const next = (i + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length;
-      actions.go(TABS[next].view);
-      tabs[next].focus();
+      const next = (i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length;
+      actions.go(items[next].dataset.view as View);
+      items[next].focus();
     });
   });
 }
@@ -512,7 +560,7 @@ function renderStatus(): void {
 
 function syncChrome(): void {
   renderHeader();
-  renderTabs();
+  renderNav();
   renderStatus();
   // Announce view-region busy state to assistive tech: true while any
   // backend operation is running, false again once idle.
@@ -529,6 +577,9 @@ function mountView(): void {
     case "scan":
       current = mountScan(content, app, actions);
       break;
+    case "doctor":
+      current = mountDoctor(content, app, actions);
+      break;
     case "validate":
       current = mountValidate(content, app, actions);
       break;
@@ -544,10 +595,27 @@ function mountView(): void {
     case "collections":
       current = mountCollections(content, app, actions);
       break;
+    case "exportimport":
+      current = mountExportImport(content, app, actions);
+      break;
+    case "savedvars":
+      current = mountSavedVars(content, app, actions);
+      break;
+    case "backups":
+      current = mountBackups(content, app, actions);
+      break;
     case "installs":
       current = mountInstalls(content, app, actions);
       break;
+    case "settings":
+      current = mountSettings(content, app, actions);
+      break;
   }
+  // Restart the entry transition on view switches only: #content's child
+  // is destroyed and recreated here, while in-view refreshes reuse it.
+  content.classList.remove("view-in");
+  void content.offsetWidth;
+  content.classList.add("view-in");
 }
 
 function errText(err: unknown, fallback?: string): string {
