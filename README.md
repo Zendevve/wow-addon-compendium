@@ -47,8 +47,12 @@ A text preview of the scan list, as rendered by the retired terminal UI:
 - **ZIP installer** — `wowfix install addon.zip` extracts, flattens, renames and
   validates before installing. Drag-and-drop works (drop a zip onto the executable).
 - **Catalog & providers** — `wowfix search <query>` queries GitHub,
-  CurseForge, WowInterface and Tukui in parallel and merges the results;
-  `wowfix install <url|owner/repo>` installs straight from any provider.
+  CurseForge, WowInterface, Tukui and Wago in parallel and merges the
+  results; `wowfix install <url|owner/repo>` installs straight from any
+  provider. Wago adds WeakAuras and Plater imports from wago.io:
+  search + download the import string for in-game import (a Wago
+  "download" is a plain-text import string, not an addon archive, and
+  Wago-hosted addon archives are not covered).
 - **Update manager** — catalog installs are tracked in a registry;
   `wowfix update` checks every tracked addon
   against its provider and applies newer releases. Update safety:
@@ -181,7 +185,10 @@ prompts), `--json` (machine-readable output for `scan`/`list`/`validate`/
 Tukui, GitHub) or a GitHub `owner/repo` pair. `search` degrades gracefully
 when a provider is unreachable: the working results are printed and the
 provider errors go to stderr. GitHub's unauthenticated API is rate-limited
-to ~60 requests/hour per IP.
+to ~60 requests/hour per IP. Wago's aura API (data.wago.io) is undocumented
+but stable and keyless — it is the same API the official WeakAuras
+Companion uses — with no stated rate limits; keep calls sparse. Wago
+downloads are import strings for in-game import, not archives.
 
 ### Configuration
 
@@ -318,7 +325,7 @@ internal/
   service/           Wails-bound API facade (scan/fix/validate/install)
   gui/               shared Wails application wiring (options, bindings)
   models/            shared data types: Addon, TOC, Issue, Profile
-  catalog/           providers (GitHub/CurseForge/WowInterface/Tukui), registry, updater
+  catalog/           providers (GitHub/CurseForge/WowInterface/Tukui/Wago), registry, updater
   scanner/           detection only — never touches the filesystem
   validator/         TOC parser + compatibility classification
   fixer/             repairs: rename, flatten, merge, delete (with backups)
@@ -387,7 +394,7 @@ without refactoring:
 
 ## Roadmap
 
-- Wago/other provider plugins (the provider interface is ready; a new
+- Other provider plugins (the provider interface is ready; a new
   source is a new `catalog.Provider` implementation)
 - Catalog screenshots (thumbnails of addon pages in the catalog browser)
 - Plugin-architecture formalization (stable public interfaces so

@@ -1,6 +1,6 @@
 // Package catalog implements the addon source layer of wowfix:
-// providers for GitHub, CurseForge, WowInterface and Tukui, a merged
-// catalog search, a persisted install registry and an updater.
+// providers for GitHub, CurseForge, WowInterface, Tukui and Wago, a
+// merged catalog search, a persisted install registry and an updater.
 //
 // Network access always goes through the *http.Client injected at
 // construction, so every provider can be exercised against an
@@ -86,6 +86,7 @@ const (
 	ProviderCurseForge   = "curseforge"
 	ProviderWowInterface = "wowinterface"
 	ProviderTukui        = "tukui"
+	ProviderWago         = "wago"
 )
 
 // Catalog aggregates the enabled providers and performs installs.
@@ -122,6 +123,7 @@ func New(enabled map[string]bool, client *http.Client) (*Catalog, error) {
 			ProviderCurseForge:   true,
 			ProviderWowInterface: true,
 			ProviderTukui:        true,
+			ProviderWago:         true,
 		}
 	}
 	c := &Catalog{providers: map[string]Provider{}}
@@ -136,6 +138,13 @@ func New(enabled map[string]bool, client *http.Client) (*Catalog, error) {
 	}
 	if enabled[ProviderTukui] {
 		c.providers[ProviderTukui] = newTukuiProvider(client, "")
+	}
+	if enabled[ProviderWago] {
+		// Wago serves WeakAuras/Plater import strings, not addon
+		// archives: its API (data.wago.io) is undocumented but stable
+		// and keyless, and downloads are import strings for in-game
+		// import. Wago-hosted addon archives are not covered.
+		c.providers[ProviderWago] = newWagoProvider(client, "")
 	}
 	return c, nil
 }
