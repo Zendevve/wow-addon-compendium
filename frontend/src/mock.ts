@@ -31,6 +31,7 @@ import type {
   CheckUpdatesResult,
   SearchCatalogResult,
   WagoImportResult,
+  CuratedResult,
   CollectionsResult,
   CollectionInfo,
   CollectionDetail,
@@ -345,6 +346,49 @@ const CATALOG_POOL: CatalogEntry[] = [
     homepage: "https://wago.io/ak3iS95aa",
   },
 ];
+
+// Curated private-server sets, keyed by profile family. `installed` is
+// derived live from the mock addons db (a matching folder with a TOC), so a
+// curated install flips its row to Installed on the next Curated() call.
+const CURATED_MANIFEST: Record<
+  string,
+  { name: string; source: string; summary: string; homepage: string }[]
+> = {
+  vanilla: [
+    {
+      name: "pfQuest",
+      source: "shagu/pfQuest",
+      summary: "Quest helper for Vanilla and TurtleWoW with extensive quest data.",
+      homepage: "https://github.com/shagu/pfQuest",
+    },
+    {
+      name: "ShaguTweaks",
+      source: "shagu/ShaguTweaks",
+      summary: "Lightweight UI tweaks for a clean Vanilla experience.",
+      homepage: "https://github.com/shagu/ShaguTweaks",
+    },
+  ],
+  wrath: [
+    {
+      name: "Questie",
+      source: "Vendethiel/Questie",
+      summary: "Quest helper for WotLK with full quest data, waypoints and objectives.",
+      homepage: "https://github.com/Vendethiel/Questie",
+    },
+    {
+      name: "Details",
+      source: "Terciob/Details",
+      summary: "Damage and healing meter with deep breakdowns and graphs.",
+      homepage: "https://github.com/Terciob/Details",
+    },
+    {
+      name: "Bartender4",
+      source: "Tukz/Bartender4",
+      summary: "Fully customizable action bars for any class and spec.",
+      homepage: "https://github.com/Tukz/Bartender4",
+    },
+  ],
+};
 
 function issue(
   partial: Partial<Issue> & { kind: string; severity: Issue["severity"] },
@@ -789,6 +833,12 @@ export function createMockService(): Service {
   const db = freshDB();
   const setupOnly = new URLSearchParams(window.location.search).get("state") === "setup";
   if (setupOnly) db.install = null;
+  // ?profile=<id> switches the active mock profile (e.g. retail) so
+  // screenshot workflows can exercise family-specific behavior.
+  const profileParam = new URLSearchParams(window.location.search).get("profile");
+  if (profileParam && db.install && PROFILES.some((p) => p.id === profileParam)) {
+    db.install.profile_id = profileParam;
+  }
   // ?tracked=none renders the updates view with an empty Managed section
   // (screenshot / empty-state workflow).
   const trackedNone =
@@ -1046,6 +1096,37 @@ export function createMockService(): Service {
           [c.name, c.author, c.summary, c.id].join(" ").toLowerCase().includes(q),
       ).map((c) => ({ ...c }));
       return { results, errors: [] };
+    },
+
+    async Curated(): Promise<CuratedResult> {
+      await delay(450);
+      const profile = PROFILES.find((p) => p.id === db.install?.profile_id);
+      const family = profile?.family ?? "wrath";
+      const set = CURATED_MANIFEST[family] ?? [];
+      return {
+        family,
+        label:
+          family === "vanilla"
+            ? "Vanilla 1.12 / Turtle-style clones"
+            : family === "wrath"
+              ? "WotLK 3.3.5a (ChromieCraft)"
+              : "",
+        profile_id: db.install?.profile_id ?? "wrath",
+        addons: set.map((m) => {
+          const folder = folderFor(m.name);
+          const existing = db.addons.find(
+            (a) => a.folder_name.toLowerCase() === folder.toLowerCase(),
+          );
+          return {
+            name: m.name,
+            source: m.source,
+            summary: m.summary,
+            homepage: m.homepage,
+            installed: existing !== undefined,
+            installed_version: existing?.toc?.version ?? "",
+          };
+        }),
+      };
     },
 
     async InstallSource(source: string, allowReplace: boolean): Promise<InstallSourceResult> {

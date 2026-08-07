@@ -9,6 +9,8 @@ import type {
   SearchCatalogResult,
   InstallSourceResult,
   WagoImportResult,
+  CuratedAddon,
+  CuratedResult,
   Provider,
 } from "../types";
 import { formatBytes } from "../types";
@@ -36,6 +38,39 @@ const FILTERS: { value: "all" | Provider; label: string }[] = [
 
 const DEBOUNCE_MS = 350;
 
+// Classic-era catalog flavors all mean "vanilla" for compatibility
+// (mirrors the backend's knownGameFamilies map).
+const GAME_VERSION_NORMAL: Record<string, string> = {
+  classic: "vanilla",
+  hardcore: "vanilla",
+  sod: "vanilla",
+  turtle: "vanilla",
+};
+
+// Profile families normalize onto the compatibility vocabulary used by the
+// curated manifests: vanilla | tbc | wrath | cata | retail.
+const FAMILY_NORMAL: Record<string, string> = {
+  vanilla: "vanilla",
+  turtle: "vanilla",
+  tbc: "tbc",
+  wrath: "wrath",
+  cata: "cata",
+  classic: "vanilla",
+  hardcore: "vanilla",
+  sod: "vanilla",
+  retail: "retail",
+};
+
+function normalizeFamily(s: string): string {
+  const k = s.trim().toLowerCase();
+  return FAMILY_NORMAL[k] ?? k;
+}
+
+function normalizeGameVersion(s: string): string {
+  const k = s.trim().toLowerCase();
+  return GAME_VERSION_NORMAL[k] ?? k;
+}
+
 export function mountCatalog(
   el: HTMLElement,
   app: AppState,
@@ -50,6 +85,8 @@ export function mountCatalog(
   let installResult: InstallSourceResult | null = null;
   let wagoResult: WagoImportResult | null = null;
   let timer = 0;
+  let curated: CuratedResult | null = null;
+  let compatOnly = false;
 
   const doSearch = async (q: string): Promise<void> => {
     query = q;
@@ -139,6 +176,67 @@ export function mountCatalog(
     }
   };
 
+  const loadCurated = async (): Promise<void> => {
+    try {
+      curated = await service.Curated();
+    } catch (err) {
+      curated = null;
+      toast({
+        type: "error",
+        title: "Could not load recommendations",
+        message: errText(err),
+      });
+    }
+    render();
+  };
+
+  const installCurated = async (addon: CuratedAddon): Promise<void> => {
+    if (installing) return;
+    const confirmed = await confirmDialog({
+      title: `Install ${addon.name}?`,
+      message: `Installs ${addon.source} via the catalog.`,
+      confirmLabel: "Install",
+    });
+    if (!confirmed) return;
+    installing = true;
+    render();
+    try {
+      const res = await service.InstallSource(addon.source, true);
+      installResult = res;
+      if (res.errors.length > 0) {
+        toast({
+          type: "error",
+          title: "Install completed with errors",
+          message: `${res.errors.length} error${res.errors.length === 1 ? "" : "s"} — see the result panel`,
+        });
+      } else if (res.installed.length > 0) {
+        toast({
+          type: "ok",
+          title: "Addon installed",
+          message: `${res.installed.join(", ")} installed · ${res.replaced.length} replaced · ${res.skipped.length} skipped`,
+        });
+      } else if (res.replaced.length > 0) {
+        toast({
+          type: "ok",
+          title: "Addon replaced",
+          message: `Replaced ${res.replaced.join(", ")} after backup`,
+        });
+      } else if (res.skipped.length > 0) {
+        toast({
+          type: "info",
+          title: "Already installed",
+          message: "The addon exists and replace is off — nothing was changed.",
+        });
+      }
+    } catch (err) {
+      toast({ type: "error", title: "Install failed", message: errText(err) });
+    } finally {
+      installing = false;
+      // Re-fetch so the row flips to Installed.
+      await loadCurated();
+    }
+  };
+
   const render = (): void => {
     if (!app.state.has_install) {
       el.innerHTML = emptyCard(
@@ -153,8 +251,49 @@ export function mountCatalog(
 
     const results = result?.results ?? [];
     const errors = result?.errors ?? [];
+    const family =
+      curated?.family ??
+      app.profiles.find((p) => p.id === app.state.profile_id)?.family ??
+      "";
+    const familyNorm = normalizeFamily(family);
+    const compatOk = (r: CatalogEntry): boolean =>
+      !r.game_version || normalizeGameVersion(r.game_version) === familyNorm;
     const filtered =
       provider === "all" ? results : results.filter((r) => r.provider === provider);
+    const shown = compatOnly ? filtered.filter(compatOk) : filtered;
+    const compatCount = results.filter(compatOk).length;
+
+    const curatedHtml =
+      curated && curated.addons.length > 0
+        ? `
+        <section class="curated" aria-label="Recommended addons">
+          <div class="curated-head">
+            <h2 class="curated-title">${icon("shield", 15)}<span>Recommended for ${escapeHtml(curated.label || "your server")}</span></h2>
+            <p class="curated-context">Curated addon sets for private servers — installed from verified sources.</p>
+          </div>
+          <div class="curated-rows">
+            ${curated.addons
+              .map(
+                (a, i) => `
+              <div class="curated-row">
+                <div class="curated-info">
+                  <span class="curated-name">${escapeHtml(a.name)}</span>
+                  <span class="curated-summary">${escapeHtml(a.summary)}</span>
+                  <span class="curated-source mono">${escapeHtml(a.source)}</span>
+                </div>
+                <div class="curated-action">
+                  ${
+                    a.installed
+                      ? `<span class="tag tag-ok">Installed</span>${a.installed_version ? `<span class="curated-version mono muted">v${escapeHtml(a.installed_version)}</span>` : ""}`
+                      : `<button class="btn btn-primary btn-sm" data-curated-install="${i}" ${installing ? "disabled" : ""}>${icon("package", 14)}<span>Install</span></button>`
+                  }
+                </div>
+              </div>`,
+              )
+              .join("")}
+          </div>
+        </section>`
+        : "";
 
     el.innerHTML = `
       <div class="catalog">
@@ -175,9 +314,11 @@ export function mountCatalog(
           </div>
         </div>
 
+        ${curatedHtml}
+
         ${
           result
-            ? `<div class="catalog-chips" role="group" aria-label="Filter by provider">
+            ? `<div class="catalog-chips" role="group" aria-label="Filter results">
                 ${FILTERS.map(
                   (f) => `
                   <button class="chip-btn${provider === f.value ? " active" : ""}" data-filter="${f.value}">
@@ -185,6 +326,13 @@ export function mountCatalog(
                     ${f.value === "all" ? `<span class="chip-count">${results.length}</span>` : `<span class="chip-count">${results.filter((r) => r.provider === f.value).length}</span>`}
                   </button>`,
                 ).join("")}
+                ${
+                  familyNorm
+                    ? `<button class="chip-btn${compatOnly ? " active" : ""}" data-compat-toggle aria-pressed="${compatOnly}" title="Hide results built for other game versions">
+                        ${icon("shield", 13)}<span>Compatible with ${escapeHtml(familyNorm)}${compatOnly ? `<span class="chip-count">(${compatCount})</span>` : ""}</span>
+                      </button>`
+                    : ""
+                }
               </div>`
             : ""
         }
@@ -253,16 +401,20 @@ export function mountCatalog(
               )
             : searching
               ? `<div class="list-loading"><span class="spinner spinner-lg"></span><span>Searching…</span></div>`
-              : filtered.length === 0
+              : shown.length === 0
                 ? emptyCard(
                     "search",
-                    query
-                      ? `No addons found for “${escapeHtml(query)}”`
-                      : "No addons found",
-                    "Try a different query or provider filter.",
+                    compatOnly && filtered.length > 0
+                      ? `No addons compatible with ${escapeHtml(familyNorm)}`
+                      : query
+                        ? `No addons found for “${escapeHtml(query)}”`
+                        : "No addons found",
+                    compatOnly && filtered.length > 0
+                      ? "Try disabling the compatibility filter."
+                      : "Try a different query or provider filter.",
                     "",
                   )
-                : `<div class="catalog-rows">${filtered.map(renderRow).join("")}</div>`
+                : `<div class="catalog-rows">${shown.map(renderRow).join("")}</div>`
         }
       </div>`;
 
@@ -315,6 +467,15 @@ export function mountCatalog(
       const entry = filtered[Number(btn.dataset.saveImport)];
       btn.addEventListener("click", () => void saveImport(entry));
     });
+    el.querySelector("[data-compat-toggle]")?.addEventListener("click", () => {
+      compatOnly = !compatOnly;
+      render();
+    });
+    el.querySelectorAll<HTMLElement>("[data-curated-install]").forEach((btn) => {
+      const addon = curated?.addons[Number(btn.dataset.curatedInstall)];
+      if (!addon) return;
+      btn.addEventListener("click", () => void installCurated(addon));
+    });
     el.querySelector("[data-go-setup]")?.addEventListener("click", () => actions.go("setup"));
 
     function submitSource(): void {
@@ -353,10 +514,13 @@ export function mountCatalog(
     </div>`;
 
   render();
+  void loadCurated();
   window.setTimeout(() => el.querySelector<HTMLInputElement>("[data-search]")?.focus(), 0);
 
   return {
-    refresh: render,
+    refresh: () => {
+      void loadCurated();
+    },
   };
 }
 

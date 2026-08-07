@@ -1300,6 +1300,13 @@ body {
   background: rgba(255, 255, 255, 0.045);
 }
 
+/* State: green ok tag (installed, enabled, healthy…). */
+.tag-ok {
+  color: var(--ok);
+  background: var(--ok-dim);
+  border: 1px solid rgba(67, 196, 120, 0.35);
+}
+
 .addon-detail {
   padding: 14px 18px 16px 52px;
   background: var(--bg-1);
@@ -2221,6 +2228,102 @@ body {
 }
 .chip-btn.active .chip-count {
   color: var(--accent);
+}
+
+/* curated private-server recommendations */
+.curated {
+  margin: 0 20px 14px;
+  border: 1px solid var(--border-strong);
+  border-left-width: 3px;
+  border-left-color: var(--gold);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%);
+}
+.curated-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 16px 2px;
+}
+.curated-title {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--gold);
+  min-width: 0;
+}
+.curated-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.curated-context {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.curated-rows {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+}
+.curated-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+  transition: background-color 0.1s ease;
+}
+.curated-row + .curated-row {
+  margin-top: 6px;
+}
+.curated-row:hover {
+  background: var(--bg-hover);
+}
+.curated-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.curated-name {
+  font-weight: 650;
+  font-size: 13.5px;
+}
+.curated-summary {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.curated-source {
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.curated-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+  flex: none;
+}
+.curated-version {
+  font-size: 11.5px;
 }
 
 .catalog-rows {

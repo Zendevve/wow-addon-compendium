@@ -231,6 +231,25 @@ export interface WagoImportResult {
   applied_hint: string;
 }
 
+// ---------- curated private-server sets ----------
+
+/** One addon in a curated set (a verified private-server manifest entry). */
+export interface CuratedAddon {
+  name: string;
+  source: string;
+  summary: string;
+  homepage: string;
+  installed: boolean;
+  installed_version: string;
+}
+
+export interface CuratedResult {
+  family: string;
+  label: string;
+  profile_id: string;
+  addons: CuratedAddon[];
+}
+
 // ---------- collections (addon loadouts) ----------
 
 export interface CollectionInfo {
@@ -315,6 +334,7 @@ export interface Service {
   SetAddonIgnored(folder: string, ignored: boolean): Promise<void>;
   RollbackAddon(folder: string): Promise<RollbackResult>;
   SearchCatalog(query: string): Promise<SearchCatalogResult>;
+  Curated(): Promise<CuratedResult>;
   InstallSource(source: string, allowReplace: boolean): Promise<InstallSourceResult>;
   SaveWagoImport(id: string): Promise<WagoImportResult>;
   RestoreAddon(folder: string, allowReplace: boolean): Promise<InstallSourceResult>;

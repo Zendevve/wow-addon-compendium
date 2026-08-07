@@ -87,6 +87,11 @@ function normalize(name: keyof Service, p: Promise<unknown>): Promise<unknown> {
         c.errors = c.errors ?? [];
         return c;
       }
+      case "Curated": {
+        const c = raw as Record<string, unknown>;
+        c.addons = c.addons ?? [];
+        return c;
+      }
       case "InstallSource":
       case "RestoreAddon": {
         const s = raw as Record<string, unknown>;
@@ -151,6 +156,7 @@ export const service: Service = {
   SetAddonIgnored: (folder, ignored) => call("SetAddonIgnored", folder, ignored),
   RollbackAddon: (folder) => call("RollbackAddon", folder),
   SearchCatalog: (query) => call("SearchCatalog", query),
+  Curated: () => call("Curated"),
   InstallSource: (source, allowReplace) =>
     call("InstallSource", source, allowReplace),
   SaveWagoImport: (id) => call("SaveWagoImport", id),
