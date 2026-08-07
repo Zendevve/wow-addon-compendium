@@ -364,6 +364,7 @@ type Addon struct {
 	Nested        bool     `json:"nested"`
 	SizeBytes     int64    `json:"size_bytes"`
 	Fixable       bool     `json:"fixable"`
+	Health        int      `json:"health"`
 	TOC           *TOC     `json:"toc"`
 	Issues        []Issue  `json:"issues"`
 	Compat        []Compat `json:"compat"`
@@ -487,6 +488,27 @@ func (s *Service) toScanResult(e *env, res *models.ScanResult) ScanResult {
 	return out
 }
 
+// addonHealth derives a 0-100 health score from the addon's issues:
+// 100 minus 30 per error, 15 per warn and 5 per info, clamped at 0.
+// A clean addon scores 100.
+func addonHealth(a *models.Addon) int {
+	score := 100
+	for _, i := range a.Issues {
+		switch i.Severity {
+		case models.SeverityError:
+			score -= 30
+		case models.SeverityWarn:
+			score -= 15
+		case models.SeverityInfo:
+			score -= 5
+		}
+	}
+	if score < 0 {
+		return 0
+	}
+	return score
+}
+
 func toAddon(a *models.Addon, profile *models.Profile) Addon {
 	ad := Addon{
 		FolderName:    a.FolderName,
@@ -496,6 +518,7 @@ func toAddon(a *models.Addon, profile *models.Profile) Addon {
 		Nested:        a.Nested,
 		SizeBytes:     a.SizeBytes,
 		Fixable:       a.Fixable(),
+		Health:        addonHealth(a),
 	}
 	if pt := a.PrimaryTOC(); pt != nil {
 		ad.TOC = &TOC{Name: pt.Name, Title: pt.Title, Interface: pt.Interface, Version: pt.Version}

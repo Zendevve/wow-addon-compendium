@@ -135,6 +135,24 @@ func TestScanFindsProblems(t *testing.T) {
 			t.Errorf("issue %q on %q not found", want.kind, want.folder)
 		}
 	}
+
+	// Health score: 100 minus 30 per error issue, 15 per warn, 5 per info.
+	// AtlasLoot is clean -> 100; Inventory carries a missing-toc error -> 70.
+	for _, a := range res.Addons {
+		switch a.FolderName {
+		case "AtlasLoot":
+			if a.Health != 100 {
+				t.Errorf("AtlasLoot health = %d, want 100 (clean addon)", a.Health)
+			}
+		case "Inventory":
+			if a.Health != 70 {
+				t.Errorf("Inventory health = %d, want 70 (one error issue)", a.Health)
+			}
+		}
+		if len(a.Issues) > 0 && a.Health >= 100 {
+			t.Errorf("addon %q has %d issue(s) but health = %d, want < 100", a.FolderName, len(a.Issues), a.Health)
+		}
+	}
 }
 
 // TestFixAllRepairs fixes the fixture without destructive confirmations
