@@ -1068,20 +1068,33 @@ func (s *Service) ApplyAllUpdates(allowReplace bool) (ApplyBatch, error) {
 	return s.applyAllIn(e, e.install.AddonsPath, allowReplace), nil
 }
 
-// applyAllIn runs the shared apply-all body against one AddOns
-// directory: resolve the catalog for the environment, check the
-// tracked addons against that directory and apply every pending
-// update. The catalog registry is shared per-user; snapshots go next
-// to the install that owns addonsDir. A hard failure (catalog setup)
-// lands in the batch's errors field with zero counts, never aborting
-// the remaining updates.
-func (s *Service) applyAllIn(e *env, addonsDir string, allowReplace bool) ApplyBatch {
+// checkAllIn resolves the catalog for the environment and checks the
+// tracked addons against one AddOns directory. Check is read-only, so
+// several installs can be checked against the same registry state
+// before any update is applied. A catalog setup failure returns the
+// error in the string list with nil updates. Check's own error is
+// deliberately dropped, matching the single-install path: provider
+// failures surface per-entry as skipped updates, never as a hard
+// failure.
+func (s *Service) checkAllIn(e *env, addonsDir string) ([]catalog.Update, []string) {
+	cat, err := s.catalogFor(e)
+	if err != nil {
+		return nil, []string{err.Error()}
+	}
+	updates, _ := catalog.Check(context.Background(), cat, cat.Reg, addonsDir)
+	return updates, nil
+}
+
+// applyUpdates applies a pre-collected set of updates into one AddOns
+// directory, snapshotting that install separately via backupRootFor. A
+// catalog setup failure lands in the batch's errors field with zero
+// counts; per-update failures are counted and never stop the rest.
+func (s *Service) applyUpdates(e *env, addonsDir string, updates []catalog.Update, allowReplace bool) ApplyBatch {
 	cat, err := s.catalogFor(e)
 	if err != nil {
 		return ApplyBatch{Applied: []ApplyEntry{}, errors: []string{err.Error()}}
 	}
-	cat.Backups = backup.New(s.backupRootFor(e, addonsDir), s.log)
-	updates, _ := catalog.Check(context.Background(), cat, cat.Reg, addonsDir)
+	backups := backup.New(s.backupRootFor(e, addonsDir), s.log)
 	batch := ApplyBatch{Applied: []ApplyEntry{}}
 	for _, u := range updates {
 		entry := ApplyEntry{Folder: u.Entry.Folder}
@@ -1091,7 +1104,7 @@ func (s *Service) applyAllIn(e *env, addonsDir string, allowReplace bool) ApplyB
 			batch.FailedCount++
 			continue
 		}
-		installed, err := catalog.Apply(context.Background(), cat, addonsDir, u, cat.Backups, s.log)
+		installed, err := catalog.Apply(context.Background(), cat, addonsDir, u, backups, s.log)
 		if err != nil {
 			entry.Message = err.Error()
 			entry.Error = err.Error()
@@ -1106,6 +1119,20 @@ func (s *Service) applyAllIn(e *env, addonsDir string, allowReplace bool) ApplyB
 		batch.AppliedCount++
 	}
 	return batch
+}
+
+// applyAllIn runs the shared apply-all body against one AddOns
+// directory: check the tracked addons, then apply every pending
+// update. This is the single-install composition (one check followed
+// by its own applies); cross-install sync uses checkAllIn and
+// applyUpdates separately so every install's check sees the same
+// registry baseline.
+func (s *Service) applyAllIn(e *env, addonsDir string, allowReplace bool) ApplyBatch {
+	updates, errs := s.checkAllIn(e, addonsDir)
+	if errs != nil {
+		return ApplyBatch{Applied: []ApplyEntry{}, errors: errs}
+	}
+	return s.applyUpdates(e, addonsDir, updates, allowReplace)
 }
 
 // SearchCatalog queries every enabled provider with the same query
@@ -1377,8 +1404,10 @@ func (s *Service) InstallsStatus() (InstallsStatusResult, error) {
 }
 
 // SyncUpdatesToAll applies every pending update to every detected
-// install with an existing AddOns directory, sharing one per-user
-// catalog registry while snapshotting each install separately. A
+// install with an existing AddOns directory: all installs are checked
+// against the shared per-user registry first, then each install's
+// updates are applied, so a tracked addon present in several installs
+// is updated in each one. Every install is snapshotted separately. A
 // failing install lands in its row's errors with zero counts and
 // never aborts the remaining installs. No installs yields an empty
 // result with a nil error.
@@ -1396,20 +1425,49 @@ func (s *Service) SyncUpdatesToAll(allowReplace bool) (SyncResult, error) {
 
 // syncInstalls runs the shared cross-install update body against an
 // explicit install list (the tests inject one; SyncUpdatesToAll
-// passes AutoDetect's results).
+// passes AutoDetect's results). It is two-pass on purpose: every
+// install is checked FIRST against the same pre-apply registry state
+// (Check is read-only; catalog.Apply re-records bumped versions), then
+// each install's collected updates are applied. A tracked addon present
+// in several installs is therefore updated in every one of them.
 func (s *Service) syncInstalls(e *env, installs []detector.Installation, allowReplace bool) SyncResult {
-	out := SyncResult{Installs: []SyncInstallResult{}}
+	// Pass 1: check every install with an existing AddOns dir. A
+	// catalog setup failure lands in that row's errors with zero
+	// counts and never aborts the pass.
+	var rows []SyncInstallResult
+	pending := make(map[string][]catalog.Update)
+	var order []string
 	for _, inst := range installs {
 		if !inst.Exists() {
 			continue
 		}
-		batch := s.applyAllIn(e, inst.AddonsPath, allowReplace)
-		row := SyncInstallResult{
-			Root:    inst.Root,
-			Updated: batch.AppliedCount,
-			Failed:  batch.FailedCount,
-			Errors:  batch.errors,
+		row := SyncInstallResult{Root: inst.Root}
+		updates, errs := s.checkAllIn(e, inst.AddonsPath)
+		if errs != nil {
+			row.Errors = errs
+		} else {
+			pending[inst.AddonsPath] = updates
 		}
+		order = append(order, inst.AddonsPath)
+		rows = append(rows, row)
+	}
+
+	// Pass 2: apply each install's collected updates.
+	for i, dir := range order {
+		row := &rows[i]
+		if row.Errors != nil {
+			continue // pass-1 failure: nothing to apply
+		}
+		batch := s.applyUpdates(e, dir, pending[dir], allowReplace)
+		row.Updated = batch.AppliedCount
+		row.Failed = batch.FailedCount
+		if len(batch.errors) > 0 {
+			row.Errors = batch.errors
+		}
+	}
+
+	out := SyncResult{Installs: []SyncInstallResult{}}
+	for _, row := range rows {
 		out.Installs = append(out.Installs, row)
 		out.TotalUpdated += row.Updated
 		out.TotalFailed += row.Failed

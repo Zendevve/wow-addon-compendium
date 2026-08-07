@@ -1090,30 +1090,27 @@ func TestSyncUpdatesToAll(t *testing.T) {
 	if len(res.Installs) != 2 {
 		t.Fatalf("rows = %d, want 2 (missing install skipped): %+v", len(res.Installs), res.Installs)
 	}
-	// The registry is shared per-user and re-read per install, so the
-	// first install's apply bumps the recorded version to 9.2.0 and the
-	// second install sees no pending update.
-	if res.TotalUpdated != 1 || res.TotalFailed != 0 {
-		t.Errorf("totals = %d updated / %d failed, want 1 / 0", res.TotalUpdated, res.TotalFailed)
+	// Both installs were checked against the same pre-apply registry
+	// baseline (two-pass: check all, then apply all), so the tracked
+	// addon is updated in each of them.
+	if res.TotalUpdated != 2 || res.TotalFailed != 0 {
+		t.Errorf("totals = %d updated / %d failed, want 2 / 0", res.TotalUpdated, res.TotalFailed)
 	}
-	if got := res.Installs[0]; got.Updated != 1 || got.Failed != 0 || len(got.Errors) != 0 {
-		t.Errorf("first row = %+v, want 1 updated / 0 failed / no errors", got)
-	}
-	if got := res.Installs[1]; got.Updated != 0 || got.Failed != 0 || len(got.Errors) != 0 {
-		t.Errorf("second row = %+v, want 0 updated (registry already bumped) / no errors", got)
+	for i, row := range res.Installs {
+		if row.Updated != 1 || row.Failed != 0 || len(row.Errors) != 0 {
+			t.Errorf("row %d = %+v, want 1 updated / 0 failed / no errors", i, row)
+		}
 	}
 
-	// Only the first install directory received the updated TOC; the
-	// second stays untouched.
-	toc, err := os.ReadFile(filepath.Join(addonsDir, "Questie", "Questie.toc"))
-	if err != nil {
-		t.Fatalf("read updated TOC: %v", err)
-	}
-	if !strings.Contains(string(toc), "## Version: 9.2.0") {
-		t.Errorf("Questie TOC not updated in the first install: %s", toc)
-	}
-	if _, err := os.Stat(filepath.Join(other, "Questie")); !os.IsNotExist(err) {
-		t.Errorf("Questie folder appeared in the second install: %v", err)
+	// Both install directories received the updated TOC.
+	for _, dir := range []string{addonsDir, other} {
+		toc, err := os.ReadFile(filepath.Join(dir, "Questie", "Questie.toc"))
+		if err != nil {
+			t.Fatalf("read updated TOC in %s: %v", dir, err)
+		}
+		if !strings.Contains(string(toc), "## Version: 9.2.0") {
+			t.Errorf("Questie TOC not updated in %s: %s", dir, toc)
+		}
 	}
 }
 
