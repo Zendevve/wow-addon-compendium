@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "sets": [
+    {
+      "family": "vanilla",
+      "label": "Vanilla 1.12 / Turtle-style clones",
+      "addons": [
+        {"name": "pfUI", "source": "shagu/pfUI", "summary": "UI replacement for Vanilla & TBC clients", "homepage": "https://github.com/shagu/pfUI"},
+        {"name": "pfQuest", "source": "shagu/pfQuest", "summary": "Quest helper with quest database for Vanilla & TBC", "homepage": "https://github.com/shagu/pfQuest"},
+        {"name": "pfQuest-turtle", "source": "shagu/pfQuest-turtle", "summary": "Turtle WoW database extension for pfQuest", "homepage": "https://github.com/shagu/pfQuest-turtle"},
+        {"name": "ShaguTweaks", "source": "shagu/ShaguTweaks", "summary": "Tweaks and enhancements for the default 1.12 interface", "homepage": "https://github.com/shagu/ShaguTweaks"},
+        {"name": "ShaguPlates", "source": "shagu/ShaguPlates", "summary": "pfUI's nameplates as a standalone addon", "homepage": "https://github.com/shagu/ShaguPlates"},
+        {"name": "ShaguDPS", "source": "shagu/ShaguDPS", "summary": "Lightweight damage meter for Vanilla 1.12", "homepage": "https://github.com/shagu/ShaguDPS"},
+        {"name": "Atlas", "source": "CosminPOP/Atlas", "summary": "Atlas TW Edition: dungeon maps for Turtle WoW", "homepage": "https://github.com/CosminPOP/Atlas"},
+        {"name": "AtlasLoot", "source": "CosminPOP/AtlasLoot", "summary": "AtlasLoot TW Edition: loot browser for Turtle WoW", "homepage": "https://github.com/CosminPOP/AtlasLoot"},
+        {"name": "BigWigs", "source": "CosminPOP/BigWigs", "summary": "Big Wigs Turtle-WoW: boss mods for Turtle WoW", "homepage": "https://github.com/CosminPOP/BigWigs"},
+        {"name": "GetBuffed", "source": "CosminPOP/GetBuffed", "summary": "Buff and debuff recommendations for your class", "homepage": "https://github.com/CosminPOP/GetBuffed"},
+        {"name": "LootRes", "source": "CosminPOP/LootRes", "summary": "Loot reserve manager for raids", "homepage": "https://github.com/CosminPOP/LootRes"},
+        {"name": "Outfitter", "source": "CosminPOP/Outfitter", "summary": "Gear-set manager for Turtle WoW", "homepage": "https://github.com/CosminPOP/Outfitter"},
+        {"name": "TWThreat", "source": "CosminPOP/TWThreat", "summary": "TW Threatmeter: threat meter for Turtle WoW", "homepage": "https://github.com/CosminPOP/TWThreat"}
+      ]
+    },
+    {
+      "family": "wrath",
+      "label": "WotLK 3.3.5a (ChromieCraft)",
+      "addons": [
+        {"name": "WeakAuras-WotLK", "source": "Bunny67/WeakAuras-WotLK", "summary": "WeakAuras framework ported to WotLK 3.3.5a", "homepage": "https://github.com/Bunny67/WeakAuras-WotLK"},
+        {"name": "Details-WotLK", "source": "Bunny67/Details-WotLK", "summary": "Details! damage meter for WotLK 3.3.5a", "homepage": "https://github.com/Bunny67/Details-WotLK"},
+        {"name": "AtlasLoot_ChromieCraft", "source": "Wrath-AddOns/AtlasLoot_ChromieCraft", "summary": "AtlasLoot build for ChromieCraft 3.3.5a", "homepage": "https://github.com/Wrath-AddOns/AtlasLoot_ChromieCraft"},
+        {"name": "Bartender4", "source": "sirus-addons/Bartender4", "summary": "Action bar replacement for WotLK 3.3.5a", "homepage": "https://github.com/sirus-addons/Bartender4"},
+        {"name": "Quartz", "source": "sirus-addons/Quartz", "summary": "Cast bar addon for WotLK 3.3.5a", "homepage": "https://github.com/sirus-addons/Quartz"},
+        {"name": "Omen", "source": "sirus-addons/Omen", "summary": "Omen 3 threat meter for WotLK 3.3.5a", "homepage": "https://github.com/sirus-addons/Omen"},
+        {"name": "OmniCC", "source": "sirus-addons/OmniCC", "summary": "Cooldown countdown text for WotLK 3.3.5a", "homepage": "https://github.com/sirus-addons/OmniCC"},
+        {"name": "Bagnon", "source": "sirus-addons/Bagnon", "summary": "Unified bags and bank for WotLK 3.3.5a", "homepage": "https://github.com/sirus-addons/Bagnon"},
+        {"name": "Auctionator", "source": "sirus-addons/Auctionator", "summary": "Auction house helper for WotLK 3.3.5a", "homepage": "https://github.com/sirus-addons/Auctionator"},
+        {"name": "Postal", "source": "sirus-addons/Postal", "summary": "Mailbox enhancements for WotLK 3.3.5a", "homepage": "https://github.com/sirus-addons/Postal"},
+        {"name": "Clique", "source": "sirus-addons/Clique", "summary": "Click-casting framework for WotLK 3.3.5a", "homepage": "https://github.com/sirus-addons/Clique"},
+        {"name": "HealBot", "source": "sirus-addons/HealBot", "summary": "HealBot raid frames for WotLK 3.3.5a", "homepage": "https://github.com/sirus-addons/HealBot"},
+        {"name": "Carbonite", "source": "Wrath-AddOns/Carbonite-3.3.5a-Remastered", "summary": "Carbonite 3.34 quest helper and maps for 3.3.5a", "homepage": "https://github.com/Wrath-AddOns/Carbonite-3.3.5a-Remastered"},
+        {"name": "TradeSkillMaster", "source": "Wrath-AddOns/TradeSkillMaster", "summary": "TradeSkillMaster: Revived professions toolkit for 3.3.5a", "homepage": "https://github.com/Wrath-AddOns/TradeSkillMaster"}
+      ]
+    }
+  ]
+}

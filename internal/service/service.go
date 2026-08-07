@@ -696,6 +696,25 @@ type SearchResult struct {
 	Errors  []string    `json:"errors"`
 }
 
+// CuratedAddon is one addon in a curated private-server set, with its
+// live install state for the active installation.
+type CuratedAddon struct {
+	Name             string `json:"name"`
+	Source           string `json:"source"`
+	Summary          string `json:"summary"`
+	Homepage         string `json:"homepage"`
+	Installed        bool   `json:"installed"`
+	InstalledVersion string `json:"installed_version,omitempty"`
+}
+
+// CuratedResult is the curated set for one game family.
+type CuratedResult struct {
+	Family    string         `json:"family"`
+	Label     string         `json:"label"`
+	ProfileID string         `json:"profile_id"`
+	Addons    []CuratedAddon `json:"addons"`
+}
+
 // DTO conversions -----------------------------------------------------------
 
 func (s *Service) toScanResult(e *env, res *models.ScanResult) ScanResult {
@@ -1326,6 +1345,93 @@ func (s *Service) SearchCatalog(query string) (SearchResult, error) {
 		}
 	}
 	return out, nil
+}
+
+// Curated returns the curated private-server addon set for the active
+// profile's family, annotated with install state when an installation
+// is available. Browsing must work without an install, so the env is
+// resolved with env() rather than requireInstall. A profile family
+// with no curated set (tbc, cata, retail) yields an empty list with a
+// nil error; the frontend shows nothing.
+func (s *Service) Curated() (CuratedResult, error) {
+	e, err := s.env()
+	if err != nil {
+		return CuratedResult{}, err
+	}
+	m, err := catalog.LoadCurated()
+	if err != nil {
+		return CuratedResult{}, err
+	}
+	family, profileID := "", ""
+	if e.profile != nil {
+		family = e.profile.Family
+		profileID = e.profile.ID
+	}
+	out := CuratedResult{Family: family, ProfileID: profileID, Addons: []CuratedAddon{}}
+	set, ok := m.SetForFamily(family)
+	if !ok {
+		return out, nil
+	}
+	out.Label = set.Label
+	for _, a := range set.Addons {
+		row := CuratedAddon{Name: a.Name, Source: a.Source, Summary: a.Summary, Homepage: a.Homepage}
+		if e.install != nil {
+			if folder := curatedFolder(e.install.AddonsPath, a); folder != "" {
+				row.Installed = true
+				row.InstalledVersion = s.tocVersion(filepath.Join(e.install.AddonsPath, folder))
+			}
+		}
+		out.Addons = append(out.Addons, row)
+	}
+	return out, nil
+}
+
+// curatedFolder returns the on-disk folder (case-insensitively) under
+// addonsDir that a curated addon installs to, or "" when none is
+// installed. Several curated sources ship under a bare folder that
+// strips the repo's flavor suffix ("pfQuest-turtle" installs
+// "pfQuest"), so a folder also matches when it is the target's prefix
+// up to a "-" or "_" boundary.
+func curatedFolder(addonsDir string, a catalog.CuratedAddon) string {
+	entries, err := os.ReadDir(addonsDir)
+	if err != nil {
+		return ""
+	}
+	targets := []string{a.Name, curatedRepoBase(a.Source)}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		for _, t := range targets {
+			if curatedFolderMatch(e.Name(), t) {
+				return e.Name()
+			}
+		}
+	}
+	return ""
+}
+
+func curatedFolderMatch(folder, target string) bool {
+	if folder == "" || target == "" {
+		return false
+	}
+	f := strings.ToLower(folder)
+	t := strings.ToLower(target)
+	if f == t {
+		return true
+	}
+	if len(f) < len(t) && strings.HasPrefix(t, f) {
+		return t[len(f)] == '-' || t[len(f)] == '_'
+	}
+	return false
+}
+
+// curatedRepoBase extracts the repo name from an "owner/repo" source.
+func curatedRepoBase(source string) string {
+	if i := strings.LastIndex(source, "/"); i >= 0 {
+		return source[i+1:]
+	}
+	return source
 }
 
 // InstallSource installs an addon from a URL or provider-scoped id

@@ -1715,3 +1715,155 @@ func TestSaveWagoImportEmptyID(t *testing.T) {
 		t.Fatal("whitespace id should error")
 	}
 }
+
+// curatedTestService wires a Service to an empty fake install under
+// the given profile id.
+func curatedTestService(t *testing.T, profileID string) (*Service, string) {
+	t.Helper()
+	root := t.TempDir()
+	addonsDir := filepath.Join(root, "Interface", "AddOns")
+	if err := os.MkdirAll(addonsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store := config.NewStoreAt(filepath.Join(t.TempDir(), "config.json"))
+	cfg := config.Default()
+	cfg.WoWPath = root
+	cfg.Flavor = ""
+	cfg.Profile = profileID
+	if err := store.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	return New(store), addonsDir
+}
+
+func writeCuratedTOC(t *testing.T, addonsDir, folder, toc string) {
+	t.Helper()
+	dir := filepath.Join(addonsDir, folder)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, folder+".toc"), []byte(toc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCurated selects the embedded set by the profile's family and
+// annotates install state from the AddOns directory.
+func TestCurated(t *testing.T) {
+	s, addonsDir := curatedTestService(t, "wrath")
+
+	res, err := s.Curated()
+	if err != nil {
+		t.Fatalf("Curated: %v", err)
+	}
+	if res.Family != "wrath" || res.ProfileID != "wrath" {
+		t.Errorf("family/profile = %q/%q, want wrath/wrath", res.Family, res.ProfileID)
+	}
+	if res.Label == "" || len(res.Addons) == 0 {
+		t.Fatalf("empty curated set: %+v", res)
+	}
+	for _, a := range res.Addons {
+		if a.Name == "" || a.Source == "" || a.Summary == "" || a.Homepage == "" {
+			t.Errorf("incomplete row %+v", a)
+		}
+		if a.Installed {
+			t.Errorf("%s reported installed with no AddOns content", a.Name)
+		}
+	}
+
+	// A matching folder with a TOC flips Installed and surfaces the
+	// TOC version. "WeakAuras" satisfies the WeakAuras-WotLK entry
+	// through the suffix-stripping rule, but "Bartender4" stays
+	// untouched.
+	writeCuratedTOC(t, addonsDir, "WeakAuras", "## Interface: 30300\n## Title: WeakAuras\n## Version: 5.12.10\n")
+
+	res, err = s.Curated()
+	if err != nil {
+		t.Fatalf("Curated after install: %v", err)
+	}
+	found := map[string]CuratedAddon{}
+	for _, a := range res.Addons {
+		found[a.Name] = a
+	}
+	if a, ok := found["WeakAuras-WotLK"]; !ok || !a.Installed || a.InstalledVersion != "5.12.10" {
+		t.Errorf("WeakAuras-WotLK row = %+v, want installed 5.12.10", a)
+	}
+	if a, ok := found["Bartender4"]; ok && a.Installed {
+		t.Errorf("Bartender4 row = %+v, want not installed", a)
+	}
+}
+
+// TestCuratedVanillaPrefixRule checks the suffix-stripping match on
+// the vanilla set: a "pfQuest" folder satisfies both the pfQuest and
+// the pfQuest-turtle entries.
+func TestCuratedVanillaPrefixRule(t *testing.T) {
+	s, addonsDir := curatedTestService(t, "turtle")
+	writeCuratedTOC(t, addonsDir, "pfQuest", "## Interface: 11200\n## Title: pfQuest\n## Version: 7.0.1\n")
+
+	res, err := s.Curated()
+	if err != nil {
+		t.Fatalf("Curated: %v", err)
+	}
+	found := map[string]CuratedAddon{}
+	for _, a := range res.Addons {
+		found[a.Name] = a
+	}
+	if a, ok := found["pfQuest-turtle"]; !ok || !a.Installed || a.InstalledVersion != "7.0.1" {
+		t.Errorf("pfQuest-turtle row = %+v, want installed 7.0.1", a)
+	}
+	if a, ok := found["pfQuest"]; !ok || !a.Installed || a.InstalledVersion != "7.0.1" {
+		t.Errorf("pfQuest row = %+v, want installed 7.0.1", a)
+	}
+	if a, ok := found["pfUI"]; ok && a.Installed {
+		t.Errorf("pfUI row = %+v, want not installed", a)
+	}
+}
+
+// TestCuratedRepoBaseMatch detects a folder that matches the source's
+// repo name rather than the addon name (e.g. the AtlasLoot_ChromieCraft
+// zip installs "AtlasLoot").
+func TestCuratedRepoBaseMatch(t *testing.T) {
+	s, addonsDir := curatedTestService(t, "wrath")
+	writeCuratedTOC(t, addonsDir, "AtlasLoot", "## Interface: 30300\n## Title: AtlasLoot\n## Version: 5.11.04\n")
+
+	res, err := s.Curated()
+	if err != nil {
+		t.Fatalf("Curated: %v", err)
+	}
+	for _, a := range res.Addons {
+		if a.Name == "AtlasLoot_ChromieCraft" && (!a.Installed || a.InstalledVersion != "5.11.04") {
+			t.Errorf("AtlasLoot_ChromieCraft row = %+v, want installed 5.11.04", a)
+		}
+	}
+}
+
+// TestCuratedVanillaProfile maps turtle and classic profiles onto the
+// vanilla family.
+func TestCuratedVanillaProfile(t *testing.T) {
+	for _, id := range []string{"turtle", "classic"} {
+		s, _ := curatedTestService(t, id)
+		res, err := s.Curated()
+		if err != nil {
+			t.Fatalf("Curated(%s): %v", id, err)
+		}
+		if res.Family != "vanilla" {
+			t.Errorf("profile %s: family = %q, want vanilla", id, res.Family)
+		}
+		if len(res.Addons) == 0 {
+			t.Errorf("profile %s: empty vanilla set", id)
+		}
+	}
+}
+
+// TestCuratedNoSetForUnknownFamily returns an empty list with a nil
+// error so the frontend shows nothing for tbc/cata/retail profiles.
+func TestCuratedNoSetForUnknownFamily(t *testing.T) {
+	s, _ := curatedTestService(t, "tbc")
+	res, err := s.Curated()
+	if err != nil {
+		t.Fatalf("Curated(tbc): %v", err)
+	}
+	if res.Family != "tbc" || len(res.Addons) != 0 {
+		t.Errorf("tbc result = %+v, want empty addons", res)
+	}
+}

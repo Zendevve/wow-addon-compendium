@@ -61,6 +61,8 @@ Usage:
   wowfix update --check         check only; exit code 0 none, 1 updates, 2 check error
   wowfix snapshot export|check <file>  export/check an offline catalog snapshot (export online, check offline)
   wowfix sources                list catalog providers and their caveats
+  wowfix curated list [--flavor <family>]  list curated private-server addons for a game family
+  wowfix curated install <name> install a curated addon for the active family
   wowfix backup                 snapshot all addons
   wowfix restore [id]           list backups, or restore one
   wowfix doctor                 check environment and permissions
@@ -152,6 +154,8 @@ func run(args []string) error {
 		return runSnapshot(rest)
 	case "sources":
 		return runSources(rest)
+	case "curated":
+		return runCurated(rest)
 	case "backup":
 		return runBackup(rest)
 	case "restore":

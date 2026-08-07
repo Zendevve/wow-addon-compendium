@@ -70,6 +70,11 @@ A text preview of the scan list, as rendered by the retired terminal UI:
   tracked addons with their latest known versions into a portable JSON
   file while online; `wowfix snapshot check` diffs it against the
   registry with no network, so update status works offline.
+- **Curated private-server sets** — a hand-verified manifest of
+  known-good addons for the vanilla-family clones (Turtle-style 1.12
+  clients) and ChromieCraft (WotLK 3.3.5a), each anchored to a GitHub
+  source and installed through the existing providers with
+  `wowfix curated list` / `wowfix curated install`.
 - **Addon profiles** — capture the current addon setup as a named
   collection (PvE/PvP/Raiding/Leveling presets) and switch between
   them; switching renames folders to `<name>.disabled` and back.
@@ -160,6 +165,8 @@ wowfix search <query>         search the addon catalog
 wowfix update [--yes]         check and apply addon updates
 wowfix snapshot export|check <file>  export/check an offline catalog snapshot (export online, check offline)
 wowfix sources                list catalog providers and their caveats
+wowfix curated list [--flavor <family>]  list curated private-server addons for a game family
+wowfix curated install <name> install a curated addon for the active family
 wowfix backup                 snapshot all addons
 wowfix restore [id]           list backups, or restore one
 wowfix doctor                 check environment and permissions
