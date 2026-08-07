@@ -201,6 +201,26 @@ func TestWagoSearchNoMatches(t *testing.T) {
 	}
 }
 
+func TestWagoSearchMalformedResponse(t *testing.T) {
+	// A 200 that is not the expected shape (an error body after an
+	// API change) must surface as an error, never as an empty result
+	// set.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"error":"Route GET:/api/search not found","statusCode":404}`))
+	}))
+	defer ts.Close()
+
+	p := newWagoProvider(ts.Client(), ts.URL)
+	addons, err := p.Search(context.Background(), "sea", 10)
+	if err == nil {
+		t.Fatal("Search should error on a response missing hits")
+	}
+	if addons != nil {
+		t.Fatalf("Search returned %d addons alongside an error", len(addons))
+	}
+}
+
 func TestWagoResolveNotFound(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -274,8 +294,8 @@ func TestWagoFixtureShape(t *testing.T) {
 	if err := json.Unmarshal([]byte(wagoSearchFixture), &sr); err != nil {
 		t.Fatalf("search fixture broken: %v", err)
 	}
-	if sr.Total != 2 || len(sr.Hits) != 2 {
-		t.Fatalf("search fixture: total=%d hits=%d", sr.Total, len(sr.Hits))
+	if sr.Hits == nil || len(*sr.Hits) != 2 || sr.Total != 2 {
+		t.Fatalf("search fixture: total=%d hits=%v", sr.Total, sr.Hits)
 	}
 	var list []wagoCheck
 	if err := json.Unmarshal([]byte(wagoCheckFixture), &list); err != nil {

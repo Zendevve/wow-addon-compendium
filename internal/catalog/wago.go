@@ -58,11 +58,14 @@ type wagoSearchHit struct {
 	Timestamp   int64  `json:"timestamp"`
 }
 
+// wagoSearchResponse mirrors the search/es response. Hits is a
+// pointer so a 200 that lacks the field entirely (an error body or a
+// renamed field after an API change) is distinguishable from a
+// legitimate no-match (hits present but empty): the former must
+// surface as an error, never as an empty result set.
 type wagoSearchResponse struct {
-	Hits []wagoSearchHit `json:"hits"`
-	// Total is checked to distinguish a legitimate no-match (200 with
-	// an empty hit list) from a silently mis-parsed response.
-	Total int `json:"total"`
+	Hits  *[]wagoSearchHit `json:"hits"`
+	Total int              `json:"total"`
 }
 
 // wagoCheck mirrors one /api/check entry. The game field is Wago's
@@ -102,12 +105,15 @@ func (p *wagoProvider) Search(ctx context.Context, query string, limit int) ([]*
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, fmt.Errorf("wago: parse search response: %w", err)
 	}
-	if resp.Total == 0 && len(resp.Hits) == 0 {
-		return nil, nil
+	if resp.Hits == nil {
+		// The API answered 200 but not with the expected shape:
+		// surface it instead of looking like an empty catalog.
+		return nil, fmt.Errorf("wago: search response missing hits")
 	}
-	out := make([]*Addon, 0, len(resp.Hits))
-	for i := range resp.Hits {
-		out = append(out, p.addonFromSearch(&resp.Hits[i]))
+	hits := *resp.Hits
+	out := make([]*Addon, 0, len(hits))
+	for i := range hits {
+		out = append(out, p.addonFromSearch(&hits[i]))
 		if limit > 0 && len(out) >= limit {
 			break
 		}
