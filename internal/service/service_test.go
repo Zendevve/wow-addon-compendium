@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wowfix/wowfix/internal/backup"
 	"github.com/wowfix/wowfix/internal/catalog"
 	"github.com/wowfix/wowfix/internal/config"
 	"github.com/wowfix/wowfix/internal/detector"
@@ -1147,5 +1148,289 @@ func TestSyncUpdatesToAllCatalogError(t *testing.T) {
 	}
 	if res.TotalUpdated != 0 || res.TotalFailed != 0 {
 		t.Errorf("totals = %d updated / %d failed, want 0 / 0", res.TotalUpdated, res.TotalFailed)
+	}
+}
+
+// newTrackedTestService wires a Service to a fake install, an isolated
+// registry, and an explicit backups directory (so the backup root does
+// not depend on the detector). It returns the service, the AddOns
+// path, the registry path and the backups directory.
+func newTrackedTestService(t *testing.T) (*Service, string, string, string) {
+	t.Helper()
+	root := t.TempDir()
+	addonsDir := filepath.Join(root, "Interface", "AddOns")
+	writeFixture(t, addonsDir)
+
+	store := config.NewStoreAt(filepath.Join(t.TempDir(), "config.json"))
+	cfg := config.Default()
+	cfg.WoWPath = root
+	cfg.Flavor = ""
+	backupsDir := filepath.Join(t.TempDir(), "backups")
+	cfg.BackupsDir = backupsDir
+	if err := store.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	s := New(store)
+	registryPath := filepath.Join(t.TempDir(), "registry.json")
+	s.registryPath = registryPath
+	return s, addonsDir, registryPath, backupsDir
+}
+
+func TestTrackedAddons(t *testing.T) {
+	s, _, registryPath, _ := newTrackedTestService(t)
+
+	// Empty registry: empty list, nil error.
+	res, err := s.TrackedAddons()
+	if err != nil {
+		t.Fatalf("TrackedAddons on empty registry: %v", err)
+	}
+	if len(res.Addons) != 0 {
+		t.Fatalf("addons = %d, want 0", len(res.Addons))
+	}
+
+	reg, err := catalog.NewRegistry(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reg.Track(catalog.Entry{Folder: "Questie-main", Title: "Questie", Version: "1.12.2", Provider: "github", ID: "Questie/Questie", Source: "Questie/Questie", Pinned: true})
+	_ = reg.Track(catalog.Entry{Folder: "AtlasLoot", Title: "AtlasLoot", Version: "7.0.4", Provider: "curseforge", ID: "atlasloot", Source: "https://www.curseforge.com/wow/addons/atlasloot", Ignored: true})
+
+	res, err = s.TrackedAddons()
+	if err != nil {
+		t.Fatalf("TrackedAddons: %v", err)
+	}
+	if len(res.Addons) != 2 {
+		t.Fatalf("addons = %d, want 2: %+v", len(res.Addons), res.Addons)
+	}
+	// Sorted by folder: AtlasLoot first.
+	first, second := res.Addons[0], res.Addons[1]
+	if first.Folder != "AtlasLoot" || second.Folder != "Questie-main" {
+		t.Errorf("order = %s, %s; want AtlasLoot, Questie-main", first.Folder, second.Folder)
+	}
+	if !first.Ignored || first.Pinned {
+		t.Errorf("AtlasLoot flags = pinned %v / ignored %v, want ignored only", first.Pinned, first.Ignored)
+	}
+	if !second.Pinned || second.Ignored {
+		t.Errorf("Questie-main flags = pinned %v / ignored %v, want pinned only", second.Pinned, second.Ignored)
+	}
+	if second.Provider != "github" || second.ID != "Questie/Questie" || second.Source != "Questie/Questie" {
+		t.Errorf("Questie-main entry = %+v", second)
+	}
+	if _, err := time.Parse(time.RFC3339, second.InstalledAt); err != nil {
+		t.Errorf("InstalledAt %q is not RFC3339: %v", second.InstalledAt, err)
+	}
+}
+
+func TestSetAddonPinnedAndIgnored(t *testing.T) {
+	s, _, registryPath, _ := newTrackedTestService(t)
+	reg, err := catalog.NewRegistry(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reg.Track(catalog.Entry{Folder: "Questie-main", Title: "Questie", Version: "1.12.2", Provider: "github", ID: "Questie/Questie", Source: "Questie/Questie"})
+
+	// Case-insensitive folder matching.
+	if err := s.SetAddonPinned("questie-main", true); err != nil {
+		t.Fatalf("SetAddonPinned: %v", err)
+	}
+	if err := s.SetAddonIgnored("Questie-main", true); err != nil {
+		t.Fatalf("SetAddonIgnored: %v", err)
+	}
+
+	reloaded, err := catalog.NewRegistry(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := reloaded.Entries()
+	if len(entries) != 1 || !entries[0].Pinned || !entries[0].Ignored {
+		t.Errorf("flags not persisted: %+v", entries)
+	}
+
+	// Unknown folder is a Go error.
+	if err := s.SetAddonPinned("Nope", true); err == nil {
+		t.Fatal("SetAddonPinned on untracked folder should error")
+	} else if !strings.Contains(err.Error(), "not tracked in the registry") {
+		t.Errorf("error = %q", err.Error())
+	}
+}
+
+// TestRollbackAddon runs the full rollback flow: a snapshot of the
+// folder exists, the folder is modified, RollbackAddon restores the
+// snapshot content, refreshes the registry entry (TOC version and
+// checksum) and pins it.
+func TestRollbackAddon(t *testing.T) {
+	s, addonsDir, registryPath, backupsDir := newTrackedTestService(t)
+	reg, err := catalog.NewRegistry(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reg.Track(catalog.Entry{
+		Folder: "Questie-main", Title: "Questie", Version: "9.9.9",
+		Provider: "github", ID: "Questie/Questie", Source: "Questie/Questie", Checksum: "stale",
+	})
+
+	folder := filepath.Join(addonsDir, "Questie-main")
+	backups := backup.New(backupsDir, nil)
+	// Seed the snapshot with the fixture content (TOC version 1.12.2).
+	if _, err := backups.Backup([]string{folder}, "seed"); err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	// Modify the folder: bump the TOC, add a file.
+	tocPath := filepath.Join(folder, "Questie.toc")
+	data, err := os.ReadFile(tocPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modified := strings.Replace(string(data), "## Version: 1.12.2", "## Version: 9.9.9", 1)
+	if err := os.WriteFile(tocPath, []byte(modified), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(folder, "extra.lua"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := s.RollbackAddon("questie-main") // case-insensitive folder
+	if err != nil {
+		t.Fatalf("RollbackAddon: %v", err)
+	}
+	if res.Folder != "Questie-main" {
+		t.Errorf("folder = %q, want Questie-main", res.Folder)
+	}
+	if res.RestoredFrom == "" {
+		t.Error("RestoredFrom is empty")
+	}
+	if res.Version != "1.12.2" {
+		t.Errorf("version = %q, want 1.12.2 (read back from the restored TOC)", res.Version)
+	}
+	if !res.Pinned {
+		t.Error("Pinned = false, want true (rollback auto-pins)")
+	}
+
+	// Old content is back, the added file is gone.
+	restored, err := os.ReadFile(tocPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(restored), "## Version: 1.12.2") {
+		t.Errorf("restored TOC = %q, want 1.12.2", restored)
+	}
+	if _, err := os.Stat(filepath.Join(folder, "extra.lua")); !os.IsNotExist(err) {
+		t.Error("file added after the snapshot still present")
+	}
+
+	// Registry entry refreshed and pinned (reload: RollbackAddon saves
+	// through its own registry instance).
+	reloaded, err := catalog.NewRegistry(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := reloaded.Entries()
+	if len(entries) != 1 {
+		t.Fatalf("registry entries = %d, want 1", len(entries))
+	}
+	e := entries[0]
+	if !e.Pinned {
+		t.Errorf("entry not pinned: %+v", e)
+	}
+	if e.Version != "1.12.2" {
+		t.Errorf("entry version = %q, want 1.12.2", e.Version)
+	}
+	want, err := catalog.ComputeManifest(folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Checksum != want {
+		t.Errorf("entry checksum = %q, want recomputed %q", e.Checksum, want)
+	}
+	if e.Provider != "github" || e.ID != "Questie/Questie" || e.Source != "Questie/Questie" {
+		t.Errorf("entry lost its provider/source: %+v", e)
+	}
+
+	// The pre-rollback snapshot of the modified state exists.
+	snapshots, err := backups.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundPre := false
+	for _, sn := range snapshots {
+		if strings.HasPrefix(sn.Reason, "pre-rollback of ") {
+			foundPre = true
+		}
+	}
+	if !foundPre {
+		t.Error("no pre-rollback snapshot of the destination")
+	}
+}
+
+func TestRollbackAddonUntracked(t *testing.T) {
+	s, _, _, _ := newTrackedTestService(t)
+	_, err := s.RollbackAddon("Nope")
+	if err == nil {
+		t.Fatal("RollbackAddon on an untracked folder should error")
+	}
+	if !strings.Contains(err.Error(), `addon "Nope" not tracked in registry`) {
+		t.Errorf("error = %q, want not-tracked message", err.Error())
+	}
+}
+
+func TestRollbackAddonNoSnapshot(t *testing.T) {
+	s, _, registryPath, _ := newTrackedTestService(t)
+	reg, err := catalog.NewRegistry(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reg.Track(catalog.Entry{Folder: "Questie-main", Title: "Questie", Version: "1.12.2", Provider: "github", ID: "Questie/Questie", Source: "Questie/Questie"})
+
+	_, err = s.RollbackAddon("Questie-main")
+	if err == nil {
+		t.Fatal("RollbackAddon with no snapshot should error")
+	}
+	if !strings.Contains(err.Error(), "no backup snapshot contains") {
+		t.Errorf("error = %q, want no-snapshot message", err.Error())
+	}
+}
+
+// TestScanReportsPinAndIgnore checks the scan DTO enrichment: tracked
+// addons carry their registry flags, untracked ones report false.
+func TestScanReportsPinAndIgnore(t *testing.T) {
+	s, _, registryPath, _ := newTrackedTestService(t)
+	reg, err := catalog.NewRegistry(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reg.Track(catalog.Entry{Folder: "Questie-main", Title: "Questie", Version: "1.12.2", Provider: "github", ID: "Questie/Questie", Source: "Questie/Questie", Pinned: true})
+	_ = reg.Track(catalog.Entry{Folder: "AtlasLoot", Title: "AtlasLoot", Version: "7.0.4", Provider: "curseforge", ID: "atlasloot", Source: "https://www.curseforge.com/wow/addons/atlasloot", Ignored: true})
+
+	res, err := s.Scan()
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	byFolder := map[string]Addon{}
+	for _, a := range res.Addons {
+		byFolder[a.FolderName] = a
+	}
+	questie, ok := byFolder["Questie-main"]
+	if !ok {
+		t.Fatal("Questie-main not in scan results")
+	}
+	if !questie.Tracked || !questie.Pinned || questie.Ignored {
+		t.Errorf("Questie-main = tracked %v / pinned %v / ignored %v, want tracked+pinned only",
+			questie.Tracked, questie.Pinned, questie.Ignored)
+	}
+	atlas, ok := byFolder["AtlasLoot"]
+	if !ok {
+		t.Fatal("AtlasLoot not in scan results")
+	}
+	if !atlas.Tracked || atlas.Pinned || !atlas.Ignored {
+		t.Errorf("AtlasLoot = tracked %v / pinned %v / ignored %v, want tracked+ignored only",
+			atlas.Tracked, atlas.Pinned, atlas.Ignored)
+	}
+	aux, ok := byFolder["AuxUI"] // untracked
+	if !ok {
+		t.Fatal("AuxUI not in scan results")
+	}
+	if aux.Tracked || aux.Pinned || aux.Ignored {
+		t.Errorf("AuxUI (untracked) = tracked %v / pinned %v / ignored %v, want all false",
+			aux.Tracked, aux.Pinned, aux.Ignored)
 	}
 }

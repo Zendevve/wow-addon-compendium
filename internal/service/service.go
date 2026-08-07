@@ -252,14 +252,7 @@ func errStrings(errs []error) []string {
 // location: a missing file yields an empty registry, a corrupt one an
 // error.
 func (s *Service) catalogFor(e *env) (*catalog.Catalog, error) {
-	path := s.registryPath
-	if path == "" {
-		var err error
-		if path, err = catalog.DefaultPath(); err != nil {
-			return nil, err
-		}
-	}
-	reg, err := catalog.NewRegistry(path)
+	reg, err := s.loadRegistry(e)
 	if err != nil {
 		return nil, err
 	}
@@ -316,18 +309,25 @@ func folderExists(addonsDir, name string) bool {
 	return false
 }
 
-// registryEntries loads the tracked registry entries keyed by lowercase
-// folder. Integrity reporting is best-effort: an unreadable or missing
-// registry yields an empty map so scans never fail over provenance.
-func (s *Service) registryEntries(e *env) map[string]catalog.Entry {
+// loadRegistry resolves the registry at the override seam or the
+// conventional location and loads it. A missing file yields an empty
+// registry; a corrupt one is an error.
+func (s *Service) loadRegistry(e *env) (*catalog.Registry, error) {
 	path := s.registryPath
 	if path == "" {
 		var err error
 		if path, err = catalog.DefaultPath(); err != nil {
-			return nil
+			return nil, err
 		}
 	}
-	reg, err := catalog.NewRegistry(path)
+	return catalog.NewRegistry(path)
+}
+
+// registryEntries loads the tracked registry entries keyed by lowercase
+// folder. Integrity reporting is best-effort: an unreadable or missing
+// registry yields an empty map so scans never fail over provenance.
+func (s *Service) registryEntries(e *env) map[string]catalog.Entry {
+	reg, err := s.loadRegistry(e)
 	if err != nil {
 		return nil
 	}
@@ -343,6 +343,21 @@ func (s *Service) registryEntries(e *env) map[string]catalog.Entry {
 func (s *Service) trackedEntry(e *env, folder string) (catalog.Entry, bool) {
 	entry, ok := s.registryEntries(e)[strings.ToLower(folder)]
 	return entry, ok
+}
+
+// tocVersion returns the ## Version of the folder's first *.toc file,
+// or "" when the folder has none or it cannot be read. Mirrors the
+// catalog's private readTOCVersion.
+func (s *Service) tocVersion(folder string) string {
+	matches, err := filepath.Glob(filepath.Join(folder, "*.toc"))
+	if err != nil || len(matches) == 0 {
+		return ""
+	}
+	toc, err := validator.ParseTOC(matches[0])
+	if err != nil || toc.Version == "" {
+		return ""
+	}
+	return toc.Version
 }
 
 // DTOs ---------------------------------------------------------------------
@@ -442,6 +457,10 @@ type Addon struct {
 	Tracked       bool   `json:"tracked"`
 	Drifted       bool   `json:"drifted"`
 	TrackedSource string `json:"tracked_source,omitempty"`
+	// Pinned and Ignored mirror the registry entry's flags; both are
+	// false for untracked addons.
+	Pinned  bool `json:"pinned"`
+	Ignored bool `json:"ignored"`
 }
 
 // Stats summarizes a scan.
@@ -510,6 +529,34 @@ type UpdatesResult struct {
 	Updates   []UpdateInfo `json:"updates"`
 	Errors    []string     `json:"errors"`
 	CheckedAt string       `json:"checked_at"`
+}
+
+// TrackedAddon is one catalog-registry entry in the management view.
+type TrackedAddon struct {
+	Folder      string `json:"folder"`
+	Title       string `json:"title"`
+	Version     string `json:"version"`
+	Provider    string `json:"provider"`
+	ID          string `json:"id"`
+	Source      string `json:"source"`
+	Pinned      bool   `json:"pinned"`
+	Ignored     bool   `json:"ignored"`
+	InstalledAt string `json:"installed_at"`
+}
+
+// TrackedResult is the full tracked-addon list.
+type TrackedResult struct {
+	Addons []TrackedAddon `json:"addons"`
+}
+
+// RollbackResult is the outcome of rolling one addon back to a
+// snapshot.
+type RollbackResult struct {
+	Folder       string `json:"folder"`
+	RestoredFrom string `json:"restored_from"`
+	Version      string `json:"version"`
+	Pinned       bool   `json:"pinned"`
+	Message      string `json:"message"`
 }
 
 // ApplyEntry is the outcome of applying one update.
@@ -636,6 +683,8 @@ func (s *Service) toScanResult(e *env, res *models.ScanResult) ScanResult {
 		if entry, ok := tracked[strings.ToLower(a.FolderName)]; ok {
 			ad.Tracked = true
 			ad.TrackedSource = entry.Source
+			ad.Pinned = entry.Pinned
+			ad.Ignored = entry.Ignored
 			if entry.Checksum != "" {
 				if sum, err := catalog.ComputeManifest(filepath.Join(res.AddonsDir, a.FolderName)); err == nil {
 					ad.Drifted = sum != entry.Checksum
@@ -1237,6 +1286,118 @@ func (s *Service) RestoreAddon(folder string, allowReplace bool) (InstallResult,
 		}, nil
 	}
 	return s.installSource(e, entry.Source, allowReplace)
+}
+
+// TrackedAddons lists every addon recorded in the catalog registry,
+// sorted by folder, for the active install. An empty registry yields
+// an empty list with a nil error.
+func (s *Service) TrackedAddons() (TrackedResult, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return TrackedResult{}, err
+	}
+	reg, err := s.loadRegistry(e)
+	if err != nil {
+		return TrackedResult{}, err
+	}
+	out := TrackedResult{Addons: []TrackedAddon{}}
+	for _, ent := range reg.Entries() { // already sorted by folder
+		out.Addons = append(out.Addons, TrackedAddon{
+			Folder:      ent.Folder,
+			Title:       ent.Title,
+			Version:     ent.Version,
+			Provider:    ent.Provider,
+			ID:          ent.ID,
+			Source:      ent.Source,
+			Pinned:      ent.Pinned,
+			Ignored:     ent.Ignored,
+			InstalledAt: ent.InstalledAt.UTC().Format(time.RFC3339),
+		})
+	}
+	return out, nil
+}
+
+// SetAddonPinned locks or unlocks a tracked addon at its current
+// version: pinned addons are skipped by update checks until unpinned.
+// An untracked folder is an error.
+func (s *Service) SetAddonPinned(folder string, pinned bool) error {
+	e, err := s.requireInstall()
+	if err != nil {
+		return err
+	}
+	reg, err := s.loadRegistry(e)
+	if err != nil {
+		return err
+	}
+	return reg.SetPinned(folder, pinned)
+}
+
+// SetAddonIgnored includes or excludes a tracked addon from update
+// management: ignored addons never appear in update checks. An
+// untracked folder is an error.
+func (s *Service) SetAddonIgnored(folder string, ignored bool) error {
+	e, err := s.requireInstall()
+	if err != nil {
+		return err
+	}
+	reg, err := s.loadRegistry(e)
+	if err != nil {
+		return err
+	}
+	return reg.SetIgnored(folder, ignored)
+}
+
+// RollbackAddon restores the addon's folder from the newest backup
+// snapshot that contains it (the current state is snapshotted first),
+// then refreshes the registry entry from the restored content: the TOC
+// version (falling back to the previously tracked version) and a fresh
+// best-effort checksum. The entry is pinned afterwards — instawow
+// semantics: the addon stops receiving updates until unpinned — while
+// keeping its provider/source, so unpinning later resumes updates from
+// the same source. Untracked folders and missing snapshots are Go
+// errors, unlike RestoreAddon's DTO-error style, so the frontend can
+// surface them distinctly.
+func (s *Service) RollbackAddon(folder string) (RollbackResult, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return RollbackResult{}, err
+	}
+	entry, ok := s.trackedEntry(e, folder)
+	if !ok {
+		return RollbackResult{}, fmt.Errorf("addon %q not tracked in registry", folder)
+	}
+	backups := backup.New(s.backupRootFor(e, e.install.AddonsPath), s.log)
+	dest := filepath.Join(e.install.AddonsPath, entry.Folder)
+	restoredFrom, err := backups.RollbackFolder(dest)
+	if err != nil {
+		return RollbackResult{}, err
+	}
+
+	// Refresh the entry from the restored folder, mirroring the
+	// install/update registration: TOC version first, then a
+	// best-effort checksum (empty on manifest failure).
+	version := s.tocVersion(dest)
+	if version == "" {
+		version = entry.Version
+	}
+	checksum, _ := catalog.ComputeManifest(dest)
+	entry.Version = version
+	entry.Checksum = checksum
+	entry.Pinned = true
+	reg, err := s.loadRegistry(e)
+	if err != nil {
+		return RollbackResult{}, err
+	}
+	if err := reg.Track(entry); err != nil {
+		return RollbackResult{}, err
+	}
+	return RollbackResult{
+		Folder:       entry.Folder,
+		RestoredFrom: restoredFrom,
+		Version:      version,
+		Pinned:       true,
+		Message:      fmt.Sprintf("restored from snapshot %s and pinned", restoredFrom),
+	}, nil
 }
 
 // Collections lists every collection with its addon count and marks

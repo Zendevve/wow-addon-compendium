@@ -82,6 +82,12 @@ func Check(ctx context.Context, catalog *Catalog, reg *Registry, addonsDir strin
 	var updates []Update
 	var errs []error
 	for _, e := range reg.Entries() {
+		if e.Pinned || e.Ignored {
+			// Pinned entries are locked at their current version;
+			// ignored entries are excluded from update management
+			// entirely. Neither is ever reported as updatable.
+			continue
+		}
 		if e.Provider == "" || e.ID == "" {
 			continue // not catalog-managed
 		}

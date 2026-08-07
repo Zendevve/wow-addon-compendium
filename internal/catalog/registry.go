@@ -25,6 +25,12 @@ type Entry struct {
 	// installed before integrity tracking existed or when the manifest
 	// could not be computed; this field is best-effort provenance.
 	Checksum string `json:"checksum,omitempty"`
+	// Pinned locks the entry at its current version: pinned addons are
+	// skipped by update checks until unpinned. Ignored excludes the
+	// entry from update management entirely. Registries written before
+	// these flags existed load with both false.
+	Pinned  bool `json:"pinned,omitempty"`
+	Ignored bool `json:"ignored,omitempty"`
 }
 
 // Registry persists the set of addons installed through the catalog
@@ -70,6 +76,17 @@ func DefaultPath() (string, error) {
 	return filepath.Join(dir, "wowfix", "registry.json"), nil
 }
 
+// findEntryIndex returns the index of the entry with folder
+// (case-insensitive), or -1 when no entry matches. The caller holds mu.
+func (r *Registry) findEntryIndex(folder string) int {
+	for i := range r.entries {
+		if strings.EqualFold(r.entries[i].Folder, folder) {
+			return i
+		}
+	}
+	return -1
+}
+
 // Track upserts an entry by folder (case-insensitive) and saves.
 func (r *Registry) Track(e Entry) error {
 	if strings.TrimSpace(e.Folder) == "" {
@@ -80,11 +97,9 @@ func (r *Registry) Track(e Entry) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for i := range r.entries {
-		if strings.EqualFold(r.entries[i].Folder, e.Folder) {
-			r.entries[i] = e
-			return r.saveLocked()
-		}
+	if i := r.findEntryIndex(e.Folder); i >= 0 {
+		r.entries[i] = e
+		return r.saveLocked()
 	}
 	r.entries = append(r.entries, e)
 	return r.saveLocked()
@@ -107,13 +122,37 @@ func (r *Registry) Entries() []Entry {
 func (r *Registry) Forget(folder string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for i := range r.entries {
-		if strings.EqualFold(r.entries[i].Folder, folder) {
-			r.entries = append(r.entries[:i], r.entries[i+1:]...)
-			return r.saveLocked()
-		}
+	if i := r.findEntryIndex(folder); i >= 0 {
+		r.entries = append(r.entries[:i], r.entries[i+1:]...)
+		return r.saveLocked()
 	}
 	return nil
+}
+
+// SetPinned sets the pinned flag of the entry for folder
+// (case-insensitive) and saves. An unknown folder is an error.
+func (r *Registry) SetPinned(folder string, pinned bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	i := r.findEntryIndex(folder)
+	if i < 0 {
+		return fmt.Errorf("folder %q is not tracked in the registry", folder)
+	}
+	r.entries[i].Pinned = pinned
+	return r.saveLocked()
+}
+
+// SetIgnored sets the ignored flag of the entry for folder
+// (case-insensitive) and saves. An unknown folder is an error.
+func (r *Registry) SetIgnored(folder string, ignored bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	i := r.findEntryIndex(folder)
+	if i < 0 {
+		return fmt.Errorf("folder %q is not tracked in the registry", folder)
+	}
+	r.entries[i].Ignored = ignored
+	return r.saveLocked()
 }
 
 // saveLocked writes the registry atomically. The caller holds mu.

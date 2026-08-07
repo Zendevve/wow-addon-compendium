@@ -142,6 +142,34 @@ func TestCheckFindsUpdates(t *testing.T) {
 	}
 }
 
+func TestCheckSkipsPinnedAndIgnored(t *testing.T) {
+	vp := &versionedProvider{name: "testprov", versions: map[string]string{
+		"pin":    "2.0.0", // entry 1.0.0 -> newer, but pinned
+		"ignore": "2.0.0", // entry 1.0.0 -> newer, but ignored
+		"normal": "2.0.0", // entry 1.0.0 -> newer, reported
+	}}
+	c := &Catalog{providers: map[string]Provider{"testprov": vp}}
+	reg, err := NewRegistry(filepath.Join(t.TempDir(), "registry.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reg.Track(Entry{Folder: "Pin", Title: "Pin", Version: "1.0.0", Provider: "testprov", ID: "pin", Pinned: true})
+	_ = reg.Track(Entry{Folder: "Ignore", Title: "Ignore", Version: "1.0.0", Provider: "testprov", ID: "ignore", Ignored: true})
+	_ = reg.Track(Entry{Folder: "PinIgnore", Title: "PinIgnore", Version: "1.0.0", Provider: "testprov", ID: "pinignore", Pinned: true, Ignored: true})
+	_ = reg.Track(Entry{Folder: "Normal", Title: "Normal", Version: "1.0.0", Provider: "testprov", ID: "normal"})
+
+	updates, err := Check(context.Background(), c, reg, "")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if len(updates) != 1 {
+		t.Fatalf("got %d updates, want 1 (only Normal): %+v", len(updates), updates)
+	}
+	if updates[0].Entry.Folder != "Normal" {
+		t.Errorf("update folder = %q, want Normal", updates[0].Entry.Folder)
+	}
+}
+
 func TestCheckPropagatesProviderError(t *testing.T) {
 	ep := &errLatestProvider{name: "testprov", err: errors.New("api down")}
 	c := &Catalog{providers: map[string]Provider{"testprov": ep}}

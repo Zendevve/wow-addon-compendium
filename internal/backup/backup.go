@@ -203,6 +203,50 @@ func (m *Manager) Restore(id string, confirm func(originalPath string) bool) (re
 	return restored, skipped, nil
 }
 
+// RollbackFolder restores the folder at originalPath from the newest
+// snapshot that contains it (matched case-insensitively on the path)
+// and returns the snapshot id, the base name of the snapshot
+// directory. The current state of the destination is snapshotted
+// first, so a rollback is never destructive, mirroring Restore. No
+// snapshot containing the folder is an error.
+func (m *Manager) RollbackFolder(originalPath string) (restoredFrom string, err error) {
+	snapshots, err := m.List()
+	if err != nil {
+		return "", err
+	}
+	for _, snap := range snapshots { // newest first
+		mf, err := readManifest(snap.Path)
+		if err != nil {
+			continue // snapshot without a manifest is not restorable
+		}
+		for _, e := range mf.Entries {
+			if !strings.EqualFold(e.OriginalPath, originalPath) {
+				continue
+			}
+			src := filepath.Join(snap.Path, e.Name)
+			if !utils.Exists(src) {
+				return "", fmt.Errorf("rollback of %q: snapshot %s is missing %s", originalPath, snap.ID, e.Name)
+			}
+			if utils.Exists(originalPath) {
+				if _, err := m.Backup([]string{originalPath}, "pre-rollback of "+filepath.Base(originalPath)); err != nil {
+					return "", fmt.Errorf("pre-rollback backup failed: %w", err)
+				}
+			}
+			if err := os.RemoveAll(originalPath); err != nil {
+				return "", fmt.Errorf("cannot remove %q: %w", originalPath, err)
+			}
+			if err := utils.CopyDir(src, originalPath); err != nil {
+				return "", fmt.Errorf("rollback of %q failed: %w", originalPath, err)
+			}
+			if m.Log != nil {
+				m.Log.Infof("Rollback of %s from snapshot %s", originalPath, snap.ID)
+			}
+			return snap.ID, nil
+		}
+	}
+	return "", fmt.Errorf("no backup snapshot contains %q", originalPath)
+}
+
 func writeManifest(dir string, mf Manifest) error {
 	data, err := json.MarshalIndent(mf, "", "  ")
 	if err != nil {

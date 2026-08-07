@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -170,6 +171,103 @@ func TestRegistryOldFormatWithoutChecksum(t *testing.T) {
 	}
 	if entries[0].Version != "9.2.0" {
 		t.Errorf("Version = %q, want 9.2.0", entries[0].Version)
+	}
+	if entries[0].Pinned || entries[0].Ignored {
+		t.Errorf("Pinned/Ignored = %v/%v, want false for old-format registry",
+			entries[0].Pinned, entries[0].Ignored)
+	}
+}
+
+func TestRegistrySetPinnedRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry.json")
+	reg, err := NewRegistry(path)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	if err := reg.Track(Entry{Folder: "Questie", Title: "Questie", Version: "9.2.0", Provider: "github", ID: "Questie/Questie"}); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+
+	// Case-insensitive folder lookup.
+	if err := reg.SetPinned("questie", true); err != nil {
+		t.Fatalf("SetPinned: %v", err)
+	}
+	reloaded, err := NewRegistry(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	entries := reloaded.Entries()
+	if len(entries) != 1 || !entries[0].Pinned {
+		t.Errorf("pinned flag not persisted: %+v", entries)
+	}
+	if entries[0].Ignored {
+		t.Error("Ignored should stay false when only pinned is set")
+	}
+
+	// Unpin persists too.
+	if err := reg.SetPinned("Questie", false); err != nil {
+		t.Fatalf("SetPinned(false): %v", err)
+	}
+	reloaded, err = NewRegistry(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got := reloaded.Entries(); len(got) != 1 || got[0].Pinned {
+		t.Errorf("unpin not persisted: %+v", got)
+	}
+}
+
+func TestRegistrySetIgnoredRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry.json")
+	reg, err := NewRegistry(path)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	if err := reg.Track(Entry{Folder: "Questie", Title: "Questie", Version: "9.2.0"}); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+
+	if err := reg.SetIgnored("questie", true); err != nil { // case-insensitive
+		t.Fatalf("SetIgnored: %v", err)
+	}
+	reloaded, err := NewRegistry(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	entries := reloaded.Entries()
+	if len(entries) != 1 || !entries[0].Ignored {
+		t.Errorf("ignored flag not persisted: %+v", entries)
+	}
+	if entries[0].Pinned {
+		t.Error("Pinned should stay false when only ignored is set")
+	}
+}
+
+func TestRegistrySetFlagsUnknownFolder(t *testing.T) {
+	reg, err := NewRegistry(filepath.Join(t.TempDir(), "registry.json"))
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	if err := reg.Track(Entry{Folder: "Questie", Version: "1.0"}); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+	for name, op := range map[string]func(string, bool) error{
+		"SetPinned":  reg.SetPinned,
+		"SetIgnored": reg.SetIgnored,
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := op("Nope", true)
+			if err == nil {
+				t.Fatal("unknown folder should error")
+			}
+			if !strings.Contains(err.Error(), `is not tracked in the registry`) {
+				t.Errorf("error = %q, want tracked-message", err.Error())
+			}
+		})
+	}
+	// The failed set must not modify anything.
+	if entries := reg.Entries(); len(entries) != 1 || entries[0].Pinned || entries[0].Ignored {
+		t.Errorf("failed set modified the registry: %+v", entries)
 	}
 }
 
