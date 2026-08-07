@@ -74,6 +74,7 @@ export interface Addon {
   nested: boolean;
   size_bytes: number;
   fixable: boolean;
+  health: number;
   toc: TOC | null;
   issues: Issue[];
   compat: CompatEntry[];

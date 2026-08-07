@@ -1,10 +1,20 @@
-// Scan list — the hero view. Live filter, per-row status + fix actions,
-// expandable detail (all issues + compat table), empty states.
+// Scan list — the hero view. Live text filter, quick health chips,
+// doctor health panel (Fix All hero CTA), per-row status + health badge
+// + fix actions, expandable detail (all issues + compat table), empty
+// states.
 
 import type { AppState, Actions } from "../app";
 import type { Addon, Issue } from "../types";
 import { ACTION_LABELS, DESTRUCTIVE_ACTIONS, formatBytes } from "../types";
 import { icon, type IconName } from "../icons";
+
+type HealthFilter = "all" | "issues" | "healthy";
+
+const HEALTH_FILTERS: { value: HealthFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "issues", label: "With issues" },
+  { value: "healthy", label: "Healthy" },
+];
 
 export function mountScan(
   el: HTMLElement,
@@ -12,6 +22,7 @@ export function mountScan(
   actions: Actions,
 ): { refresh: () => void } {
   const expanded = new Set<string>();
+  let healthFilter: HealthFilter = "all";
   const toolbar = document.createElement("div");
   toolbar.className = "scan-toolbar";
   const list = document.createElement("div");
@@ -33,10 +44,27 @@ export function mountScan(
     return hay.includes(q);
   };
 
+  const byHealth = (a: Addon): boolean =>
+    healthFilter === "all"
+      ? true
+      : healthFilter === "issues"
+        ? a.issues.length > 0
+        : a.issues.length === 0;
+
+  // Mean of the per-addon health scores (integer, 0-100).
+  const avgHealth = (): number => {
+    const addons = app.scan?.addons ?? [];
+    if (addons.length === 0) return 100;
+    const sum = addons.reduce((acc, a) => acc + a.health, 0);
+    return Math.round(sum / addons.length);
+  };
+
   const renderToolbar = (): void => {
     const scan = app.scan;
     const filterActive = app.filter.length > 0;
-    const shown = scan ? scan.addons.filter(matches).length : 0;
+    const shown = scan
+      ? scan.addons.filter((a) => matches(a) && byHealth(a)).length
+      : 0;
     toolbar.innerHTML = `
       <div class="search-box">
         <span class="search-icon">${icon("search", 16)}</span>
@@ -59,7 +87,7 @@ export function mountScan(
                   : ""
               }
               ${
-                filterActive
+                filterActive || healthFilter !== "all"
                   ? `<span class="count-item muted">showing ${shown} of ${scan.stats.total}</span>`
                   : ""
               }
@@ -91,6 +119,68 @@ export function mountScan(
     });
   };
 
+  const renderChips = (): string => `
+    <div class="scan-chips" role="group" aria-label="Filter addons by health">
+      ${HEALTH_FILTERS.map((f) => {
+        const count = app.scan!.addons.filter((a) =>
+          f.value === "all"
+            ? true
+            : f.value === "issues"
+              ? a.issues.length > 0
+              : a.issues.length === 0,
+        ).length;
+        return `<button class="chip-btn${healthFilter === f.value ? " active" : ""}" data-health="${f.value}">
+          ${f.label}<span class="chip-count">${count}</span>
+        </button>`;
+      }).join("")}
+    </div>`;
+
+  const renderPanel = (): string => {
+    const scan = app.scan!;
+    const avg = avgHealth();
+    const band =
+      avg >= 85 ? "healthy" : avg >= 60 ? "attention" : "repair";
+    const bandLabel =
+      band === "healthy"
+        ? "Healthy"
+        : band === "attention"
+          ? "Needs attention"
+          : "Needs repair";
+    const fixable = scan.addons.filter((a) => a.fixable).length;
+    const s = scan.stats;
+    return `
+      <div class="doctor-panel band-${band}">
+        <div class="doctor-health">
+          <span class="doctor-kicker">Addon Health</span>
+          <span class="doctor-score">${avg}<span class="doctor-denom">/100</span></span>
+          <span class="doctor-band">${bandLabel}</span>
+        </div>
+        <div class="doctor-side">
+          <p class="doctor-stats">
+            <b>${s.total}</b> addons · <b>${s.problems}</b> with issues
+            ${s.errors > 0 ? ` · <b>${s.errors}</b> error${s.errors === 1 ? "" : "s"}` : ""}
+          </p>
+          <button class="btn btn-primary btn-lg" data-panel-fixall ${fixable === 0 || app.busy ? "disabled" : ""}>
+            ${icon("wrench", 16)}<span>Fix All${fixable ? ` (${fixable})` : ""}</span>
+          </button>
+        </div>
+      </div>`;
+  };
+
+  const renderAllHealthy = (): string => {
+    const avg = avgHealth();
+    const s = app.scan!.stats;
+    return `
+      <div class="empty doctor-healthy">
+        <span class="empty-icon doctor-healthy-icon">${icon("check-circle", 28)}</span>
+        <h2 class="empty-title">All addons healthy</h2>
+        <p class="empty-sub">Addon Health: ${avg}/100 — ${s.total} addon${s.total === 1 ? "" : "s"}, no issues found.</p>
+        <div class="empty-actions">
+          <button class="btn btn-outline" data-rescan>${icon("refresh", 16)}<span>Rescan</span></button>
+        </div>
+      </div>`;
+  };
+
   const renderList = (): void => {
     if (!app.state.has_install) {
       list.innerHTML = emptyCard(
@@ -119,7 +209,10 @@ export function mountScan(
         </div>`
       : "";
 
-    const filtered = app.scan.addons.filter(matches);
+    const hasAddons = app.scan.addons.length > 0;
+    const allHealthy = hasAddons && app.scan.stats.problems === 0;
+    const filtered = app.scan.addons.filter((a) => matches(a) && byHealth(a));
+
     let rows = "";
     if (app.scan.addons.length === 0) {
       rows = emptyCard(
@@ -129,17 +222,30 @@ export function mountScan(
         `<button class="btn btn-outline" data-rescan>${icon("refresh", 16)}<span>Rescan</span></button>`,
       );
     } else if (filtered.length === 0) {
+      const filteredByChip = healthFilter !== "all" && !app.filter;
       rows = emptyCard(
         "search",
-        `No addons match “${escapeHtml(app.filter)}”`,
-        "Try a different filter — it matches folder names, titles and problem messages.",
-        `<button class="btn btn-outline" data-clear-filter>${icon("x", 16)}<span>Clear filter</span></button>`,
+        filteredByChip
+          ? healthFilter === "issues"
+            ? "No addons with issues"
+            : "No healthy addons"
+          : `No addons match “${escapeHtml(app.filter)}”`,
+        filteredByChip
+          ? "Switch to another view to see every addon."
+          : "Try a different filter — it matches folder names, titles and problem messages.",
+        filteredByChip
+          ? `<button class="btn btn-outline" data-clear-health>${icon("x", 16)}<span>Show all</span></button>`
+          : `<button class="btn btn-outline" data-clear-filter>${icon("x", 16)}<span>Clear filter</span></button>`,
       );
     } else {
       rows = filtered.map((a, i) => renderRow(a, i)).join("");
     }
 
-    list.innerHTML = `${errorsHtml}<div class="addon-rows">${rows}</div>`;
+    list.innerHTML = `
+      ${errorsHtml}
+      ${hasAddons ? renderChips() : ""}
+      ${hasAddons ? (allHealthy ? renderAllHealthy() : renderPanel()) : ""}
+      <div class="addon-rows">${rows}</div>`;
 
     list.querySelector("[data-rescan]")?.addEventListener("click", () => actions.scan());
     list.querySelector("[data-clear-filter]")?.addEventListener("click", () => {
@@ -147,6 +253,17 @@ export function mountScan(
       renderToolbar();
       renderList();
       toolbar.querySelector<HTMLInputElement>(".search-input")?.focus();
+    });
+    list.querySelector("[data-clear-health]")?.addEventListener("click", () => {
+      healthFilter = "all";
+      renderList();
+    });
+    list.querySelector("[data-panel-fixall]")?.addEventListener("click", () => void actions.fixAll());
+    list.querySelectorAll<HTMLElement>("[data-health]").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        healthFilter = (chip.dataset.health ?? "all") as HealthFilter;
+        renderList();
+      });
     });
 
     list.querySelectorAll<HTMLElement>("[data-row]").forEach((row) => {
@@ -178,6 +295,8 @@ export function mountScan(
     const isOpen = expanded.has(a.folder_name);
     const glyph: IconName =
       a.status === "error" ? "x-circle" : a.status === "warn" ? "alert" : "check-circle";
+    const badgeClass =
+      a.status === "error" ? "hb-error" : a.status === "warn" ? "hb-warn" : "hb-ok";
     const issue = a.issues[0];
     const rename =
       a.suggested_name && a.suggested_name !== a.folder_name
@@ -202,7 +321,10 @@ export function mountScan(
     return `
       <div class="addon-row status-${a.status}${isOpen ? " expanded" : ""}" role="button" tabindex="0"
         data-row="${i}" aria-expanded="${isOpen}" aria-label="${escapeAttr(a.folder_name)}: ${a.status}">
-        <span class="addon-status status-${a.status}">${icon(glyph, 18)}</span>
+        <span class="addon-status-cell">
+          <span class="addon-status status-${a.status}">${icon(glyph, 18)}</span>
+          <span class="health-badge ${badgeClass}" title="Health ${a.health}/100">${a.health}</span>
+        </span>
         <div class="addon-info">
           <div class="addon-name-line">
             <span class="addon-name">${escapeHtml(a.folder_name)}</span>

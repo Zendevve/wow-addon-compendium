@@ -1010,7 +1010,7 @@ body {
 
 .addon-row {
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
@@ -1049,6 +1049,12 @@ body {
 .addon-status {
   display: inline-flex;
   justify-content: center;
+}
+.addon-status-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
 }
 .addon-info {
   min-width: 0;
@@ -1102,6 +1108,149 @@ body {
 }
 .addon-fix {
   min-width: 0;
+}
+
+/* ---------- scan doctor ---------- */
+
+.scan-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 12px;
+  flex-wrap: wrap;
+}
+
+.doctor-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin: 0 0 14px;
+  padding: 16px 20px;
+  border: 1px solid var(--border-strong);
+  border-left-width: 3px;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%);
+}
+.doctor-panel.band-healthy {
+  border-left-color: var(--ok);
+}
+.doctor-panel.band-attention {
+  border-left-color: var(--warn);
+}
+.doctor-panel.band-repair {
+  border-left-color: var(--error);
+}
+
+.doctor-health {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+.doctor-kicker {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.doctor-score {
+  font-size: 34px;
+  font-weight: 750;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-1);
+}
+.doctor-denom {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-3);
+  margin-left: 2px;
+}
+.band-healthy .doctor-score {
+  color: var(--ok);
+}
+.band-attention .doctor-score {
+  color: var(--warn);
+}
+.band-repair .doctor-score {
+  color: var(--error);
+}
+.doctor-band {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 11px;
+  border-radius: 12px;
+  font-size: 11.5px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.band-healthy .doctor-band {
+  color: var(--ok);
+  background: var(--ok-dim);
+}
+.band-attention .doctor-band {
+  color: var(--warn);
+  background: var(--warn-dim);
+}
+.band-repair .doctor-band {
+  color: var(--error);
+  background: var(--error-dim);
+}
+
+.doctor-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  flex: none;
+}
+.doctor-stats {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.doctor-stats b {
+  color: var(--text-1);
+  font-weight: 650;
+}
+
+.doctor-healthy {
+  border: 1px solid rgba(67, 196, 120, 0.3);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%);
+  padding: 26px 20px;
+}
+.doctor-healthy-icon {
+  color: var(--ok);
+}
+
+.health-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 27px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: 10.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.health-badge.hb-ok {
+  color: var(--ok);
+  background: var(--ok-dim);
+}
+.health-badge.hb-warn {
+  color: var(--warn);
+  background: var(--warn-dim);
+}
+.health-badge.hb-error {
+  color: var(--error);
+  background: var(--error-dim);
 }
 
 .tag {

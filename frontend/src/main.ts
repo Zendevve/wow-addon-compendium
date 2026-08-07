@@ -8,6 +8,7 @@ import type {
   State,
   Profile,
   ScanResult,
+  ScanStats,
   ValidateResult,
   InstallResult,
   View,
@@ -154,6 +155,7 @@ const actions: Actions = {
 
   async fixAll(): Promise<void> {
     if (app.busy || !app.scan) return;
+    const before = { ...app.scan.stats };
     const fixable = app.scan.addons.filter((a) => a.fixable);
     if (fixable.length === 0) return;
     const destructive = fixable.filter((a) =>
@@ -179,8 +181,12 @@ const actions: Actions = {
     current?.refresh();
     try {
       const res = await service.FixAll(allowDestructive);
-      await rescanAfterMutation();
-      toastFixResult(res, "Fix All complete");
+      // Rescan immediately so the health panel and the toast reflect the
+      // before/after diff, not just the fix batch.
+      const after = await service.Scan();
+      app.scan = after;
+      app.validation = null;
+      toastFixAllSummary(res, before, after.stats);
     } catch (err) {
       toast({ type: "error", title: "Fix All failed", message: errText(err) });
     } finally {
@@ -323,6 +329,34 @@ function toastFixResult(res: FixResult, doneTitle: string): void {
       message: `${res.fixed} fix${res.fixed === 1 ? "" : "es"} applied`,
     });
   }
+}
+
+// Toast the before/after scan diff of a Fix All run: how many problems were
+// repaired and what the with-issues / error counts dropped to.
+function toastFixAllSummary(res: FixResult, before: ScanStats, after: ScanStats): void {
+  const failed = res.fixes.filter((f) => !f.ok);
+  if (res.failed > 0) {
+    toast({
+      type: res.fixed > 0 ? "warn" : "error",
+      title: `${res.failed} fix${res.failed === 1 ? "" : "es"} failed`,
+      message: failed.map((f) => `${f.addon}: ${f.message}`).join(" · "),
+    });
+    return;
+  }
+  const fixedProblems = before.problems - after.problems;
+  if (fixedProblems <= 0) {
+    toast({
+      type: "ok",
+      title: "Fix All complete",
+      message: `${before.problems} with issues → ${after.problems}, ${before.errors} error${before.errors === 1 ? "" : "s"} → ${after.errors}`,
+    });
+    return;
+  }
+  toast({
+    type: "ok",
+    title: `Fixed ${fixedProblems} problem${fixedProblems === 1 ? "" : "s"}`,
+    message: `${before.problems} with issues → ${after.problems}, ${before.errors} error${before.errors === 1 ? "" : "s"} → ${after.errors}`,
+  });
 }
 
 function renderHeader(): void {

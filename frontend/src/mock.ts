@@ -281,6 +281,7 @@ function seedAddons(): Addon[] {
       nested: false,
       size_bytes: 14520,
       fixable: true,
+      health: 70,
       toc: null,
       issues: [
         issue({
@@ -303,6 +304,7 @@ function seedAddons(): Addon[] {
       nested: false,
       size_bytes: 3841204,
       fixable: true,
+      health: 85,
       toc: {
         path: "C:\\Games\\World of Warcraft Classic\\Interface\\AddOns\\Atlas\\Atlas.toc",
         name: "Atlas",
@@ -338,6 +340,7 @@ function seedAddons(): Addon[] {
       nested: false,
       size_bytes: 268912,
       fixable: true,
+      health: 85,
       toc: {
         path: "C:\\Games\\World of Warcraft Classic\\Interface\\AddOns\\AuxUI\\AuxUI-Classic.toc",
         name: "AuxUI-Classic",
@@ -369,6 +372,7 @@ function seedAddons(): Addon[] {
       nested: false,
       size_bytes: 9812080,
       fixable: false,
+      health: 85,
       toc: {
         path: "C:\\Games\\World of Warcraft Classic\\Interface\\AddOns\\DeadlyBossMods\\DBM.toc",
         name: "DBM",
@@ -397,6 +401,7 @@ function seedAddons(): Addon[] {
       nested: true,
       size_bytes: 892318,
       fixable: true,
+      health: 85,
       toc: {
         path: "C:\\Games\\World of Warcraft Classic\\Interface\\AddOns\\DPSMate-main\\DPSMate\\DPSMate.toc",
         name: "DPSMate",
@@ -428,6 +433,7 @@ function seedAddons(): Addon[] {
       nested: false,
       size_bytes: 5321088,
       fixable: true,
+      health: 85,
       toc: {
         path: "C:\\Games\\World of Warcraft Classic\\Interface\\AddOns\\Questie\\Questie.toc",
         name: "Questie",
@@ -459,6 +465,7 @@ function seedAddons(): Addon[] {
       nested: false,
       size_bytes: 5321088,
       fixable: true,
+      health: 85,
       toc: {
         path: "C:\\Games\\World of Warcraft Classic\\Interface\\AddOns\\Questie-main\\Questie.toc",
         name: "Questie",
@@ -490,6 +497,7 @@ function seedAddons(): Addon[] {
       nested: false,
       size_bytes: 0,
       fixable: true,
+      health: 85,
       toc: null,
       issues: [
         issue({
@@ -511,6 +519,7 @@ function seedAddons(): Addon[] {
       nested: false,
       size_bytes: 2411520,
       fixable: false,
+      health: 100,
       toc: {
         path: "C:\\Games\\World of Warcraft Classic\\Interface\\AddOns\\AtlasLoot\\AtlasLoot.toc",
         name: "AtlasLoot",
@@ -531,6 +540,7 @@ function seedAddons(): Addon[] {
       nested: false,
       size_bytes: 6123520,
       fixable: false,
+      health: 100,
       toc: {
         path: "C:\\Games\\World of Warcraft Classic\\Interface\\AddOns\\BigWigs\\BigWigs.toc",
         name: "BigWigs",
@@ -544,6 +554,16 @@ function seedAddons(): Addon[] {
       compat: [compat("BigWigs.toc", 30300)],
     },
   ];
+}
+
+// Health score mirrors the backend rule: 100 minus 30 per error issue,
+// 15 per warn, 5 per info, clamped at 0.
+function healthOf(a: Addon): number {
+  let h = 100;
+  for (const i of a.issues) {
+    h -= i.severity === "error" ? 30 : i.severity === "warn" ? 15 : 5;
+  }
+  return Math.max(0, h);
 }
 
 function freshDB(): MockDB {
@@ -577,7 +597,7 @@ function scanOf(db: MockDB): ScanResult {
     addons_dir: db.install?.addons_dir ?? "",
     profile_id: db.install?.profile_id ?? "wrath",
     scanned_at: db.scannedAt,
-    addons: [...db.addons],
+    addons: db.addons.map((a) => ({ ...a, health: healthOf(a) })),
     errors: [...db.scanErrors],
     stats: recomputeStats(db),
   };
@@ -717,6 +737,7 @@ export function createMockService(): Service {
           nested: false,
           size_bytes: 2842624,
           fixable: false,
+          health: 100,
           toc: {
             path: `${db.install?.addons_dir ?? "C:\\Games\\World of Warcraft Classic\\Interface\\AddOns"}\\WeakAuras\\WeakAuras.toc`,
             name: "WeakAuras",
@@ -826,6 +847,7 @@ export function createMockService(): Service {
           nested: false,
           size_bytes: 1048576 + (folder.length % 9) * 262144,
           fixable: false,
+          health: 100,
           toc: {
             path: `${db.install?.addons_dir ?? "C:\\Games\\World of Warcraft Classic\\Interface\\AddOns"}\\${folder}\\${folder}.toc`,
             name: folder,
