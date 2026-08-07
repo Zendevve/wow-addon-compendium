@@ -59,6 +59,23 @@ type env struct {
 	profile *models.Profile
 }
 
+// resolveInstall resolves the configured installation, falling back to
+// auto-detection when no path is saved. It is strict: any resolution
+// failure is returned as an error for callers that require an install.
+func (s *Service) resolveInstall(cfg *config.Config) (*detector.Installation, error) {
+	if cfg.WoWPath != "" {
+		return detector.DetectPath(cfg.WoWPath)
+	}
+	installs, err := detector.AutoDetect(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	if len(installs) == 0 {
+		return nil, nil
+	}
+	return &installs[0], nil
+}
+
 // env loads the config, resolves the installation (the saved wow_path,
 // or auto-detection) and picks the active profile.
 func (s *Service) env() (*env, error) {
@@ -66,33 +83,26 @@ func (s *Service) env() (*env, error) {
 	if err != nil {
 		return nil, err
 	}
+	install, err := s.resolveInstall(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return s.buildEnv(cfg, install), nil
+}
+
+// buildEnv assembles the runtime context from a loaded config and a
+// possibly nil install, applying the install's profile override.
+func (s *Service) buildEnv(cfg *config.Config, install *detector.Installation) *env {
 	profile := models.ProfileByID(cfg.Profile)
 	if profile == nil {
 		profile = models.DefaultProfile()
-	}
-
-	var install *detector.Installation
-	if cfg.WoWPath != "" {
-		inst, err := detector.DetectPath(cfg.WoWPath)
-		if err != nil {
-			return nil, err
-		}
-		install = inst
-	} else {
-		installs, err := detector.AutoDetect(context.Background())
-		if err != nil {
-			return nil, err
-		}
-		if len(installs) > 0 {
-			install = &installs[0]
-		}
 	}
 	if install != nil && install.ProfileID != "" {
 		if p := models.ProfileByID(install.ProfileID); p != nil {
 			profile = p
 		}
 	}
-	return &env{store: s.store, cfg: cfg, install: install, profile: profile}, nil
+	return &env{store: s.store, cfg: cfg, install: install, profile: profile}
 }
 
 // requireInstall returns the resolved env or a clear error when no
@@ -422,12 +432,31 @@ func toInstallResult(res *installer.Result) InstallResult {
 
 // Wails-bound methods -------------------------------------------------------
 
-// GetState returns the initial UI state, install or not.
+// GetState returns the initial UI state, install or not. A saved
+// wow_path that no longer resolves is not fatal: the state degrades to
+// HasInstall=false and keeps the stale path so the setup view can
+// prefill the path picker. Only a genuinely fatal problem (config store
+// unreadable) surfaces as an error.
 func (s *Service) GetState() (AppState, error) {
-	e, err := s.env()
+	cfg, err := s.store.Load()
 	if err != nil {
 		return AppState{}, err
 	}
+	install, err := s.resolveInstall(cfg)
+	if err != nil || install == nil {
+		// No usable install (stale saved path, nothing auto-detected):
+		// report the setup state instead of failing the whole UI.
+		e := s.buildEnv(cfg, nil)
+		return AppState{
+			Version:       s.Version,
+			WoWPath:       cfg.WoWPath,
+			ProfileID:     e.profile.ID,
+			ProfileName:   e.profile.Name,
+			AutoBackup:    e.cfg.AutoBackup,
+			Confirmations: e.cfg.Confirmations,
+		}, nil
+	}
+	e := s.buildEnv(cfg, install)
 	st := AppState{
 		Version:       s.Version,
 		ProfileID:     e.profile.ID,
@@ -435,12 +464,10 @@ func (s *Service) GetState() (AppState, error) {
 		AutoBackup:    e.cfg.AutoBackup,
 		Confirmations: e.cfg.Confirmations,
 	}
-	if e.install != nil {
-		st.WoWPath = e.install.Root
-		st.Flavor = e.install.Flavor
-		st.AddonsDir = e.install.AddonsPath
-		st.HasInstall = true
-	}
+	st.WoWPath = e.install.Root
+	st.Flavor = e.install.Flavor
+	st.AddonsDir = e.install.AddonsPath
+	st.HasInstall = true
 	return st, nil
 }
 

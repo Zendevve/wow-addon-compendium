@@ -197,6 +197,53 @@ func TestValidateTable(t *testing.T) {
 	}
 }
 
+// TestGetStateStalePath saves a wow_path that does not exist and
+// expects GetState to report the setup state (no install, stale path
+// kept for the path picker) instead of failing the whole UI.
+func TestGetStateStalePath(t *testing.T) {
+	store := config.NewStoreAt(filepath.Join(t.TempDir(), "config.json"))
+	cfg := config.Default()
+	stale := filepath.Join(t.TempDir(), "missing")
+	cfg.WoWPath = stale
+	if err := store.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	s := New(store)
+
+	st, err := s.GetState()
+	if err != nil {
+		t.Fatalf("GetState failed for stale wow_path: %v", err)
+	}
+	if st.HasInstall {
+		t.Fatalf("has_install = true, want false for stale path")
+	}
+	if st.WoWPath != stale {
+		t.Fatalf("wow_path = %q, want stale value %q preserved for prefill", st.WoWPath, stale)
+	}
+	if st.ProfileID != "wrath" {
+		t.Fatalf("profile_id = %q, want %q", st.ProfileID, "wrath")
+	}
+}
+
+// TestGetStateValidPath checks the normal case: a resolvable wow_path
+// yields the full install state with no error.
+func TestGetStateValidPath(t *testing.T) {
+	s, addonsDir := newTestService(t)
+	st, err := s.GetState()
+	if err != nil {
+		t.Fatalf("GetState failed for valid path: %v", err)
+	}
+	if !st.HasInstall {
+		t.Fatal("has_install = false, want true for valid path")
+	}
+	if st.AddonsDir != addonsDir {
+		t.Errorf("addons_dir = %q, want %q", st.AddonsDir, addonsDir)
+	}
+	if st.ProfileID != "wrath" {
+		t.Errorf("profile_id = %q, want wrath (default)", st.ProfileID)
+	}
+}
+
 // TestInstallZip installs an archive built in memory and checks the
 // folder lands on disk and is reported as installed.
 func TestInstallZip(t *testing.T) {
