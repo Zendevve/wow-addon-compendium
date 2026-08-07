@@ -59,6 +59,7 @@ Usage:
   wowfix info <addon>           show details for an addon (name, URL or owner/repo)
   wowfix update [--yes]         check and apply addon updates
   wowfix update --check         check only; exit code 0 none, 1 updates, 2 check error
+  wowfix snapshot export|check <file>  export/check an offline catalog snapshot (export online, check offline)
   wowfix sources                list catalog providers and their caveats
   wowfix backup                 snapshot all addons
   wowfix restore [id]           list backups, or restore one
@@ -147,6 +148,8 @@ func run(args []string) error {
 		return runInfo(rest)
 	case "update":
 		return runUpdate(rest)
+	case "snapshot":
+		return runSnapshot(rest)
 	case "sources":
 		return runSources(rest)
 	case "backup":

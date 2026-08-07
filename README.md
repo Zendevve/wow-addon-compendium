@@ -62,6 +62,10 @@ A text preview of the scan list, as rendered by the retired terminal UI:
 - **Integrity tracking** — every catalog install/update records a content
   checksum of the installed addon folder, so post-install drift (manual
   edits, tampering, partial overwrites) can be detected.
+- **Offline catalog snapshots** — `wowfix snapshot export` freezes the
+  tracked addons with their latest known versions into a portable JSON
+  file while online; `wowfix snapshot check` diffs it against the
+  registry with no network, so update status works offline.
 - **Addon profiles** — capture the current addon setup as a named
   collection (PvE/PvP/Raiding/Leveling presets) and switch between
   them; switching renames folders to `<name>.disabled` and back.
@@ -150,6 +154,7 @@ wowfix validate               validate TOC compatibility
 wowfix list                   list addons with status
 wowfix search <query>         search the addon catalog
 wowfix update [--yes]         check and apply addon updates
+wowfix snapshot export|check <file>  export/check an offline catalog snapshot (export online, check offline)
 wowfix sources                list catalog providers and their caveats
 wowfix backup                 snapshot all addons
 wowfix restore [id]           list backups, or restore one

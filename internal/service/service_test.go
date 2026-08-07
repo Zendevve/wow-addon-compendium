@@ -1434,3 +1434,117 @@ func TestScanReportsPinAndIgnore(t *testing.T) {
 			aux.Tracked, aux.Pinned, aux.Ignored)
 	}
 }
+
+// TestExportSnapshot freezes the tracked addon state plus the latest
+// versions resolved through the mock provider into the snapshot DTO;
+// pinned entries keep their flag and per-addon lookup failures land in
+// Warnings instead of aborting the export.
+func TestExportSnapshot(t *testing.T) {
+	s, _, regPath, mock := newTestCatalogService(t)
+	reg, err := catalog.NewRegistry(regPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reg.Track(catalog.Entry{Folder: "Alpha", Title: "Alpha", Version: "1.0.0",
+		Provider: "github", ID: "acme/alpha", Source: "acme/alpha"})
+	_ = reg.Track(catalog.Entry{Folder: "Beta", Title: "Beta", Version: "2.0.0", Pinned: true,
+		Provider: "github", ID: "acme/beta", Source: "acme/beta"})
+	_ = reg.Track(catalog.Entry{Folder: "Broken", Title: "Broken", Version: "1.0.0",
+		Provider: "github", ID: "acme/broken", Source: "acme/broken"})
+	mock.repos["acme/alpha"] = "v2.0.0"
+	mock.repos["acme/beta"] = "v2.1.0"
+	// acme/broken has no repository metadata: the lookup fails.
+
+	res, err := s.ExportSnapshot()
+	if err != nil {
+		t.Fatalf("ExportSnapshot: %v", err)
+	}
+	if res.AddonCount != 3 {
+		t.Fatalf("addon_count = %d, want 3", res.AddonCount)
+	}
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "Broken") {
+		t.Fatalf("warnings = %v, want the Broken lookup failure", res.Warnings)
+	}
+	if _, err := time.Parse(time.RFC3339, res.ExportedAt); err != nil {
+		t.Errorf("exported_at %q is not RFC3339: %v", res.ExportedAt, err)
+	}
+	snap, err := catalog.UnmarshalSnapshot([]byte(res.SnapshotJSON))
+	if err != nil {
+		t.Fatalf("snapshot_json does not parse: %v", err)
+	}
+	if snap.Profile != "wrath" {
+		t.Errorf("profile = %q, want wrath", snap.Profile)
+	}
+	byFolder := map[string]catalog.SnapshotAddon{}
+	for _, a := range snap.Addons {
+		byFolder[a.Folder] = a
+	}
+	if a := byFolder["Alpha"]; a.LatestVersion != "v2.0.0" || a.InstalledVersion != "1.0.0" {
+		t.Errorf("Alpha = %+v, want resolved latest v2.0.0", a)
+	}
+	if a := byFolder["Beta"]; !a.Pinned || a.LatestVersion != "v2.1.0" {
+		t.Errorf("Beta = %+v, want pinned with resolved latest", a)
+	}
+	if a := byFolder["Broken"]; a.LatestVersion != "" {
+		t.Errorf("Broken latest = %q, want empty on lookup failure", a.LatestVersion)
+	}
+}
+
+// TestCheckSnapshot diffs a snapshot against the live registry with
+// no network traffic (the mock is deliberately left empty) and maps
+// the updates into the UpdateInfo DTO shape; pinned entries are
+// skipped.
+func TestCheckSnapshot(t *testing.T) {
+	s, _, regPath, _ := newTestCatalogService(t)
+	reg, err := catalog.NewRegistry(regPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reg.Track(catalog.Entry{Folder: "Alpha", Title: "Alpha", Version: "1.0.0",
+		Provider: "github", ID: "acme/alpha", Source: "acme/alpha"})
+	_ = reg.Track(catalog.Entry{Folder: "Pinned", Title: "Pinned", Version: "1.0.0", Pinned: true,
+		Provider: "github", ID: "acme/pinned", Source: "acme/pinned"})
+
+	snap := &catalog.Snapshot{
+		Version: 1,
+		Profile: "wrath",
+		Addons: []catalog.SnapshotAddon{
+			{Folder: "Alpha", Provider: "github", ID: "acme/alpha", Source: "acme/alpha",
+				InstalledVersion: "1.0.0", LatestVersion: "v2.0.0"},
+			{Folder: "Pinned", Provider: "github", ID: "acme/pinned", Source: "acme/pinned",
+				InstalledVersion: "1.0.0", LatestVersion: "v9.0.0"},
+		},
+	}
+	data, err := snap.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := s.CheckSnapshot(string(data))
+	if err != nil {
+		t.Fatalf("CheckSnapshot: %v", err)
+	}
+	if len(res.Errors) != 0 {
+		t.Fatalf("errors = %v, want none", res.Errors)
+	}
+	if len(res.Updates) != 1 {
+		t.Fatalf("updates = %d, want 1: %+v", len(res.Updates), res.Updates)
+	}
+	u := res.Updates[0]
+	if u.Folder != "Alpha" || u.CurrentVersion != "1.0.0" || u.LatestVersion != "v2.0.0" ||
+		u.Provider != "github" || u.ID != "acme/alpha" || u.Source != "acme/alpha" {
+		t.Errorf("update = %+v", u)
+	}
+	if u.FlavorMismatch {
+		t.Errorf("flavor_mismatch = true, want false")
+	}
+}
+
+// TestCheckSnapshotBadJSON surfaces malformed snapshot input as a
+// clear Go error.
+func TestCheckSnapshotBadJSON(t *testing.T) {
+	s, _, _, _ := newTestCatalogService(t)
+	if _, err := s.CheckSnapshot("{not json"); err == nil {
+		t.Error("bad snapshot JSON should error")
+	}
+}

@@ -531,6 +531,22 @@ type UpdatesResult struct {
 	CheckedAt string       `json:"checked_at"`
 }
 
+// SnapshotResult is the outcome of exporting an offline catalog
+// snapshot: the portable snapshot JSON plus a summary for the UI.
+type SnapshotResult struct {
+	SnapshotJSON string   `json:"snapshot_json"`
+	ExportedAt   string   `json:"exported_at"`
+	AddonCount   int      `json:"addon_count"`
+	Warnings     []string `json:"warnings"`
+}
+
+// SnapshotCheck is the outcome of checking a catalog snapshot against
+// the current registry without any network access.
+type SnapshotCheck struct {
+	Updates []UpdateInfo `json:"updates"`
+	Errors  []string     `json:"errors"`
+}
+
 // TrackedAddon is one catalog-registry entry in the management view.
 type TrackedAddon struct {
 	Folder      string `json:"folder"`
@@ -1057,6 +1073,84 @@ func (s *Service) CheckUpdates() (UpdatesResult, error) {
 	if checkErr != nil {
 		out.Errors = append(out.Errors, checkErr.Error())
 	}
+	return out, nil
+}
+
+// ExportSnapshot freezes the tracked addon state with the latest known
+// versions into a portable JSON snapshot, for offline update checks.
+// Pinned and ignored addons are included with their flags; per-addon
+// resolution failures land in Warnings while the export continues.
+// Requires an install (it resolves the active profile through it).
+func (s *Service) ExportSnapshot() (SnapshotResult, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return SnapshotResult{}, err
+	}
+	cat, err := s.catalogFor(e)
+	if err != nil {
+		return SnapshotResult{}, err
+	}
+	snap, err := catalog.ExportSnapshot(context.Background(), cat, cat.Reg, e.profile.ID, time.Now())
+	if err != nil {
+		return SnapshotResult{}, err
+	}
+	data, err := snap.Marshal()
+	if err != nil {
+		return SnapshotResult{}, err
+	}
+	warnings := snap.Warnings
+	if warnings == nil {
+		warnings = []string{}
+	}
+	return SnapshotResult{
+		SnapshotJSON: string(data),
+		ExportedAt:   snap.ExportedAt.Format(time.RFC3339),
+		AddonCount:   len(snap.Addons),
+		Warnings:     warnings,
+	}, nil
+}
+
+// CheckSnapshot diffs a snapshot's latest versions against the current
+// registry and reports the pending updates entirely offline: no
+// provider is queried. Invalid snapshot JSON is a clear Go error.
+// Flavor mismatches are computed against the profile recorded in the
+// snapshot, and the snapshot's export warnings surface in Errors.
+func (s *Service) CheckSnapshot(snapshotJSON string) (SnapshotCheck, error) {
+	snap, err := catalog.UnmarshalSnapshot([]byte(snapshotJSON))
+	if err != nil {
+		return SnapshotCheck{}, err
+	}
+	e, err := s.requireInstall()
+	if err != nil {
+		return SnapshotCheck{}, err
+	}
+	reg, err := s.loadRegistry(e)
+	if err != nil {
+		return SnapshotCheck{}, err
+	}
+	updates, err := snap.Diff(reg)
+	if err != nil {
+		return SnapshotCheck{}, err
+	}
+	profile := models.ProfileByID(snap.Profile)
+	out := SnapshotCheck{Updates: []UpdateInfo{}, Errors: []string{}}
+	for _, u := range updates {
+		info := UpdateInfo{
+			Folder:         u.Entry.Folder,
+			Title:          u.Entry.Title,
+			CurrentVersion: u.Entry.Version,
+			LatestVersion:  u.Latest.LatestVersion,
+			Provider:       u.Entry.Provider,
+			ID:             u.Entry.ID,
+			Source:         u.Entry.Source,
+			FlavorMismatch: u.Mismatch,
+		}
+		if u.Mismatch {
+			info.FlavorLabel = flavorLabel(u.Latest.GameVersion, profile)
+		}
+		out.Updates = append(out.Updates, info)
+	}
+	out.Errors = append(out.Errors, snap.Warnings...)
 	return out, nil
 }
 
