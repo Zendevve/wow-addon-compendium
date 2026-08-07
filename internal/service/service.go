@@ -11,6 +11,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/wowfix/wowfix/internal/backup"
+	"github.com/wowfix/wowfix/internal/catalog"
 	"github.com/wowfix/wowfix/internal/config"
 	"github.com/wowfix/wowfix/internal/detector"
 	"github.com/wowfix/wowfix/internal/fixer"
@@ -34,6 +36,15 @@ type Service struct {
 	log   *logger.Logger
 	// Version is the build version reported in AppState; defaults to "dev".
 	Version string
+	// httpClient is used for catalog provider traffic; nil uses
+	// http.DefaultClient. Tests point it at an in-memory mock.
+	httpClient *http.Client
+	// registryPath overrides the catalog registry location; empty uses
+	// catalog.DefaultPath(). Tests isolate the registry in a temp dir.
+	registryPath string
+	// enabledProviders selects the catalog providers; nil enables all.
+	// Tests enable only the provider they mock.
+	enabledProviders map[string]bool
 }
 
 // New returns a Service backed by store. A nil store falls back to the
@@ -198,6 +209,76 @@ func errStrings(errs []error) []string {
 	return out
 }
 
+// catalogFor builds a catalog wired with the environment's registry,
+// backups, logger, profile and CurseForge API key, mirroring
+// cmd/wowfix's newCatalog. The registry lives at the conventional
+// location: a missing file yields an empty registry, a corrupt one an
+// error.
+func (s *Service) catalogFor(e *env) (*catalog.Catalog, error) {
+	path := s.registryPath
+	if path == "" {
+		var err error
+		if path, err = catalog.DefaultPath(); err != nil {
+			return nil, err
+		}
+	}
+	reg, err := catalog.NewRegistry(path)
+	if err != nil {
+		return nil, err
+	}
+	client := s.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	cat, err := catalog.New(s.enabledProviders, client)
+	if err != nil {
+		return nil, err
+	}
+	cat.Reg = reg
+	cat.Backups = backup.New(s.backupRoot(e), s.log)
+	cat.Log = s.log
+	cat.Profile = e.profile
+	// The WOWFIX_CURSEFORGE_API_KEY environment variable takes
+	// precedence; the saved config value is the fallback (the catalog
+	// checks the env var itself, so this field only needs the config).
+	key := os.Getenv("WOWFIX_CURSEFORGE_API_KEY")
+	if key == "" {
+		key = e.cfg.CurseForgeAPIKey
+	}
+	cat.CurseForgeAPIKey = key
+	return cat, nil
+}
+
+// flavorLabel describes an update's game-family mismatch as a short
+// human string, e.g. "retail addon · profile wrath". It is empty when
+// the game version is unknown.
+func flavorLabel(gameVersion string, profile *models.Profile) string {
+	addon := strings.ToLower(strings.TrimSpace(gameVersion))
+	if profile == nil || addon == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s addon · profile %s", addon, strings.ToLower(models.FamilyLabel(profile.Family)))
+}
+
+// folderExists reports whether addonsDir contains a directory named
+// name, case-insensitively (an install may differ in case from the
+// registry's tracked folder).
+func folderExists(addonsDir, name string) bool {
+	if _, err := os.Stat(filepath.Join(addonsDir, name)); err == nil {
+		return true
+	}
+	entries, err := os.ReadDir(addonsDir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() && strings.EqualFold(e.Name(), name) {
+			return true
+		}
+	}
+	return false
+}
+
 // DTOs ---------------------------------------------------------------------
 
 // AppState is the initial UI snapshot.
@@ -334,6 +415,59 @@ type InstallResult struct {
 	Replaced  []string `json:"replaced"`
 	Skipped   []string `json:"skipped"`
 	Errors    []string `json:"errors"`
+}
+
+// UpdateInfo is one pending addon update.
+type UpdateInfo struct {
+	Folder         string `json:"folder"`
+	Title          string `json:"title"`
+	CurrentVersion string `json:"current_version"`
+	LatestVersion  string `json:"latest_version"`
+	Provider       string `json:"provider"`
+	ID             string `json:"id"`
+	Source         string `json:"source"`
+	FlavorMismatch bool   `json:"flavor_mismatch"`
+	FlavorLabel    string `json:"flavor_label"`
+}
+
+// UpdatesResult is the outcome of a catalog update check.
+type UpdatesResult struct {
+	Updates   []UpdateInfo `json:"updates"`
+	Errors    []string     `json:"errors"`
+	CheckedAt string       `json:"checked_at"`
+}
+
+// ApplyEntry is the outcome of applying one update.
+type ApplyEntry struct {
+	Folder  string `json:"folder"`
+	OK      bool   `json:"ok"`
+	Message string `json:"message"`
+	Error   string `json:"error,omitempty"`
+}
+
+// ApplyBatch is the outcome of applying one or more updates.
+type ApplyBatch struct {
+	Applied      []ApplyEntry `json:"applied"`
+	AppliedCount int          `json:"applied_count"`
+	FailedCount  int          `json:"failed_count"`
+}
+
+// SearchHit is one addon found by a catalog search.
+type SearchHit struct {
+	Provider      string `json:"provider"`
+	Name          string `json:"name"`
+	Author        string `json:"author"`
+	Summary       string `json:"summary"`
+	LatestVersion string `json:"latest_version"`
+	GameVersion   string `json:"game_version"`
+	ID            string `json:"id"`
+	Homepage      string `json:"homepage"`
+}
+
+// SearchResult is the outcome of a catalog search.
+type SearchResult struct {
+	Results []SearchHit `json:"results"`
+	Errors  []string    `json:"errors"`
 }
 
 // DTO conversions -----------------------------------------------------------
@@ -616,4 +750,202 @@ func (s *Service) InstallZip(zipPath string, allowReplace bool) (InstallResult, 
 		return InstallResult{}, err
 	}
 	return toInstallResult(res), nil
+}
+
+// CheckUpdates compares every registry-tracked addon against its
+// provider and reports the available updates. Partial provider
+// failures land in Errors while the found updates are still returned;
+// only hard failures (no install, unreadable registry) surface as the
+// error.
+func (s *Service) CheckUpdates() (UpdatesResult, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return UpdatesResult{}, err
+	}
+	cat, err := s.catalogFor(e)
+	if err != nil {
+		return UpdatesResult{}, err
+	}
+	updates, checkErr := catalog.Check(context.Background(), cat, cat.Reg, e.install.AddonsPath)
+	out := UpdatesResult{
+		Errors:    []string{},
+		CheckedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	for _, u := range updates {
+		info := UpdateInfo{
+			Folder:         u.Entry.Folder,
+			Title:          u.Entry.Title,
+			CurrentVersion: u.Entry.Version,
+			LatestVersion:  u.Latest.LatestVersion,
+			Provider:       u.Entry.Provider,
+			ID:             u.Entry.ID,
+			Source:         u.Entry.Source,
+			FlavorMismatch: u.Mismatch,
+		}
+		if u.Mismatch {
+			info.FlavorLabel = flavorLabel(u.Latest.GameVersion, e.profile)
+		}
+		out.Updates = append(out.Updates, info)
+	}
+	if checkErr != nil {
+		out.Errors = append(out.Errors, checkErr.Error())
+	}
+	return out, nil
+}
+
+// ApplyUpdate applies the pending update for one folder, matched
+// case-insensitively against a fresh check. allowReplace stands in
+// for the user's confirmation: without it an update that would
+// replace an existing folder is skipped with a message.
+func (s *Service) ApplyUpdate(folder string, allowReplace bool) (ApplyBatch, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return ApplyBatch{}, err
+	}
+	cat, err := s.catalogFor(e)
+	if err != nil {
+		return ApplyBatch{}, err
+	}
+	updates, _ := catalog.Check(context.Background(), cat, cat.Reg, e.install.AddonsPath)
+	var target *catalog.Update
+	for i := range updates {
+		if strings.EqualFold(updates[i].Entry.Folder, folder) {
+			target = &updates[i]
+			break
+		}
+	}
+	if target == nil {
+		return ApplyBatch{
+			Applied:     []ApplyEntry{{Folder: folder, Message: fmt.Sprintf("no update available for %q", folder)}},
+			FailedCount: 1,
+		}, nil
+	}
+	if !allowReplace && folderExists(e.install.AddonsPath, target.Entry.Folder) {
+		return ApplyBatch{
+			Applied:     []ApplyEntry{{Folder: folder, Message: "folder already exists, replace declined"}},
+			FailedCount: 1,
+		}, nil
+	}
+	installed, err := catalog.Apply(context.Background(), cat, e.install.AddonsPath, *target, cat.Backups, s.log)
+	if err != nil {
+		return ApplyBatch{
+			Applied:     []ApplyEntry{{Folder: folder, Message: err.Error(), Error: err.Error()}},
+			FailedCount: 1,
+		}, nil
+	}
+	return ApplyBatch{
+		Applied:      []ApplyEntry{{Folder: installed, OK: true, Message: "applied"}},
+		AppliedCount: 1,
+	}, nil
+}
+
+// ApplyAllUpdates applies every pending update and collects the
+// outcomes into one batch. A failure never stops the remaining
+// updates.
+func (s *Service) ApplyAllUpdates(allowReplace bool) (ApplyBatch, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return ApplyBatch{}, err
+	}
+	cat, err := s.catalogFor(e)
+	if err != nil {
+		return ApplyBatch{}, err
+	}
+	updates, _ := catalog.Check(context.Background(), cat, cat.Reg, e.install.AddonsPath)
+	batch := ApplyBatch{Applied: []ApplyEntry{}}
+	for _, u := range updates {
+		entry := ApplyEntry{Folder: u.Entry.Folder}
+		if !allowReplace && folderExists(e.install.AddonsPath, u.Entry.Folder) {
+			entry.Message = "folder already exists, replace declined"
+			batch.Applied = append(batch.Applied, entry)
+			batch.FailedCount++
+			continue
+		}
+		installed, err := catalog.Apply(context.Background(), cat, e.install.AddonsPath, u, cat.Backups, s.log)
+		if err != nil {
+			entry.Message = err.Error()
+			entry.Error = err.Error()
+			batch.Applied = append(batch.Applied, entry)
+			batch.FailedCount++
+			continue
+		}
+		entry.OK = true
+		entry.Folder = installed
+		entry.Message = "applied"
+		batch.Applied = append(batch.Applied, entry)
+		batch.AppliedCount++
+	}
+	return batch, nil
+}
+
+// SearchCatalog queries every enabled provider with the same query
+// and returns the merged results. Partial provider failures land in
+// Errors; when every provider fails the error is returned alongside
+// the empty results (matching the CLI).
+func (s *Service) SearchCatalog(query string) (SearchResult, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return SearchResult{}, err
+	}
+	cat, err := s.catalogFor(e)
+	if err != nil {
+		return SearchResult{}, err
+	}
+	addons, searchErr := cat.Search(context.Background(), query, 20)
+	out := SearchResult{Results: []SearchHit{}, Errors: []string{}}
+	for _, a := range addons {
+		out.Results = append(out.Results, SearchHit{
+			Provider:      a.Provider,
+			Name:          a.Name,
+			Author:        a.Author,
+			Summary:       a.Summary,
+			LatestVersion: a.LatestVersion,
+			GameVersion:   a.GameVersion,
+			ID:            a.ID,
+			Homepage:      a.Homepage,
+		})
+	}
+	if searchErr != nil {
+		out.Errors = append(out.Errors, searchErr.Error())
+		if len(out.Results) == 0 {
+			return out, searchErr
+		}
+	}
+	return out, nil
+}
+
+// InstallSource installs an addon from a URL or provider-scoped id
+// through the catalog (see catalog.InstallFromSource for the accepted
+// source forms) and reports the outcome with the same DTO as
+// InstallZip. The catalog layer reports installed folder names and
+// errors only, so replaced/skipped stay empty; allowReplace is
+// accepted for the frontend contract, but the catalog currently
+// always replaces existing folders.
+func (s *Service) InstallSource(source string, allowReplace bool) (InstallResult, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return InstallResult{}, err
+	}
+	cat, err := s.catalogFor(e)
+	if err != nil {
+		return InstallResult{}, err
+	}
+	if _, err := detector.EnsureAddons(e.install); err != nil {
+		return InstallResult{}, err
+	}
+	installed, err := cat.InstallFromSource(context.Background(), source, e.install.AddonsPath, nil)
+	if err != nil {
+		return InstallResult{
+			Installed: []string{},
+			Replaced:  []string{},
+			Skipped:   []string{},
+			Errors:    []string{err.Error()},
+		}, nil
+	}
+	return InstallResult{
+		Installed: installed,
+		Replaced:  []string{},
+		Skipped:   []string{},
+		Errors:    []string{},
+	}, nil
 }

@@ -4,11 +4,19 @@ package service
 
 import (
 	"archive/zip"
+	"bytes"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/wowfix/wowfix/internal/catalog"
 	"github.com/wowfix/wowfix/internal/config"
 )
 
@@ -250,7 +258,7 @@ func TestInstallZip(t *testing.T) {
 	s, addonsDir := newTestService(t)
 	zipPath := filepath.Join(t.TempDir(), "newaddon.zip")
 	writeZip(t, zipPath, map[string]string{
-		"NewAddon/NewAddon.toc": "## Interface: 30300\n## Title: NewAddon\n## Version: 1.0\n",
+		"NewAddon/NewAddon.toc": "## Interface: 30300\n## Title: NewAddon\n## Version: 1.0.0\n",
 	})
 
 	res, err := s.InstallZip(zipPath, true)
@@ -265,5 +273,380 @@ func TestInstallZip(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(addonsDir, "NewAddon")); err != nil {
 		t.Errorf("NewAddon folder missing after install: %v", err)
+	}
+}
+
+// rewriteTransport redirects api.github.com and codeload.github.com
+// traffic to a mock server so the real GitHub provider never touches
+// the network.
+type rewriteTransport struct {
+	mock string // mock origin "host:port"
+	base http.RoundTripper
+}
+
+func (t *rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	switch req.URL.Host {
+	case "api.github.com", "codeload.github.com", "github.com":
+	default:
+		return nil, fmt.Errorf("test transport refuses non-GitHub host %s", req.URL.Host)
+	}
+	r := req.Clone(req.Context())
+	u := *req.URL
+	u.Scheme = "http"
+	u.Host = t.mock
+	r.URL = &u
+	return t.base.RoundTrip(r)
+}
+
+// mockGitHub serves the GitHub endpoints the real provider hits:
+// repository metadata, latest releases and release zip assets.
+type mockGitHub struct {
+	repos   map[string]string // "owner/repo" -> latest release tag
+	zips    map[string][]byte // "owner/repo" -> archive bytes for Download
+	results []string          // "owner/repo" names returned by search
+}
+
+// client returns an http.Client whose GitHub traffic reaches only the
+// mock.
+func (m *mockGitHub) client(t *testing.T) *http.Client {
+	t.Helper()
+	var ts *httptest.Server
+	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/search/repositories":
+			// The provider first tries a topic-qualified query; reject
+			// it so the plain query fallback is exercised.
+			if strings.Contains(r.URL.Query().Get("q"), "topic:") {
+				http.Error(w, "422 Unprocessable Entity", http.StatusUnprocessableEntity)
+				return
+			}
+			q := strings.ToLower(r.URL.Query().Get("q"))
+			var items []string
+			for _, full := range m.results {
+				owner, name, ok := strings.Cut(full, "/")
+				if !ok || (q != "" && !strings.Contains(strings.ToLower(name), q)) {
+					continue
+				}
+				items = append(items, fmt.Sprintf(
+					`{"full_name":%q,"name":%q,"description":"","html_url":"https://github.com/%s","default_branch":"main","owner":{"login":%q}}`,
+					full, name, full, owner))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"items":[%s]}`, strings.Join(items, ","))
+		case strings.HasPrefix(r.URL.EscapedPath(), "/dl/"):
+			id := strings.ReplaceAll(strings.TrimPrefix(r.URL.EscapedPath(), "/dl/"), "%2F", "/")
+			data, ok := m.zips[id]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			w.Write(data)
+		case strings.HasPrefix(r.URL.Path, "/repos/"):
+			rest := strings.TrimPrefix(r.URL.Path, "/repos/")
+			if id, ok := strings.CutSuffix(rest, "/releases/latest"); ok {
+				tag, ok := m.repos[id]
+				if !ok {
+					http.NotFound(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":"addon.zip","browser_download_url":"https://github.com/dl/%s"}]}`,
+					tag, url.PathEscape(id))
+				return
+			}
+			owner, name, ok := strings.Cut(rest, "/")
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			if _, known := m.repos[rest]; !known {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"full_name":%q,"name":%q,"description":"","html_url":"https://github.com/%s","default_branch":"main","owner":{"login":%q}}`,
+				rest, name, rest, owner)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(ts.Close)
+	return &http.Client{
+		Transport: &rewriteTransport{mock: strings.TrimPrefix(ts.URL, "http://"), base: ts.Client().Transport},
+	}
+}
+
+// addonZipBytes builds an addon archive in memory: one folder with a
+// single TOC file.
+func addonZipBytes(t *testing.T, folder, toc string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create(folder + "/" + folder + ".toc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte(toc)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// newTestCatalogService wires a Service to a fake install, an
+// isolated registry and a github-only catalog whose traffic goes to a
+// mock GitHub server. It returns the service, the AddOns path, the
+// registry path and the mock.
+func newTestCatalogService(t *testing.T) (*Service, string, string, *mockGitHub) {
+	t.Helper()
+	root := t.TempDir()
+	addonsDir := filepath.Join(root, "Interface", "AddOns")
+	writeFixture(t, addonsDir)
+
+	store := config.NewStoreAt(filepath.Join(t.TempDir(), "config.json"))
+	cfg := config.Default()
+	cfg.WoWPath = root
+	cfg.Flavor = ""
+	if err := store.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	s := New(store)
+	s.registryPath = filepath.Join(t.TempDir(), "registry.json")
+	s.enabledProviders = map[string]bool{catalog.ProviderGitHub: true}
+	mock := &mockGitHub{repos: map[string]string{}, zips: map[string][]byte{}}
+	s.httpClient = mock.client(t)
+	return s, addonsDir, s.registryPath, mock
+}
+
+// TestSearchCatalog checks the search wiring: mock GitHub results
+// arrive in the DTO shape.
+func TestSearchCatalog(t *testing.T) {
+	s, _, _, mock := newTestCatalogService(t)
+	mock.results = []string{"xperl/xperl", "flux/flux"}
+
+	res, err := s.SearchCatalog("x")
+	if err != nil {
+		t.Fatalf("SearchCatalog: %v", err)
+	}
+	if len(res.Results) != 2 {
+		t.Fatalf("results = %d, want 2: %+v", len(res.Results), res.Results)
+	}
+	if len(res.Errors) != 0 {
+		t.Fatalf("errors = %v, want none", res.Errors)
+	}
+	byName := map[string]SearchHit{}
+	for _, h := range res.Results {
+		byName[h.Name] = h
+	}
+	h, ok := byName["xperl"]
+	if !ok {
+		t.Fatalf("xperl missing from results: %+v", res.Results)
+	}
+	if h.Provider != "github" || h.ID != "xperl/xperl" || h.Author != "xperl" ||
+		h.Homepage != "https://github.com/xperl/xperl" {
+		t.Errorf("xperl row = %+v", h)
+	}
+}
+
+// TestInstallSource installs a real archive through the github
+// provider's Download and checks the folder lands on disk and is
+// tracked in the registry.
+func TestInstallSource(t *testing.T) {
+	s, addonsDir, regPath, mock := newTestCatalogService(t)
+	mock.repos["acme/newaddon"] = "v1.0.0"
+	mock.zips["acme/newaddon"] = addonZipBytes(t, "NewAddon", "## Title: NewAddon\n## Version: 1.0.0\n## Interface: 30300\n")
+
+	res, err := s.InstallSource("acme/newaddon", true)
+	if err != nil {
+		t.Fatalf("InstallSource: %v", err)
+	}
+	if len(res.Errors) != 0 {
+		t.Fatalf("errors = %v, want none", res.Errors)
+	}
+	if !slices.Contains(res.Installed, "NewAddon") {
+		t.Errorf("installed = %v, want NewAddon", res.Installed)
+	}
+	if len(res.Replaced) != 0 || len(res.Skipped) != 0 {
+		t.Errorf("replaced/skipped should stay empty, got %v/%v", res.Replaced, res.Skipped)
+	}
+	if _, err := os.Stat(filepath.Join(addonsDir, "NewAddon", "NewAddon.toc")); err != nil {
+		t.Fatalf("installed TOC missing: %v", err)
+	}
+
+	reg, err := catalog.NewRegistry(regPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := reg.Entries()
+	if len(entries) != 1 {
+		t.Fatalf("registry entries = %d, want 1: %+v", len(entries), entries)
+	}
+	e := entries[0]
+	if e.Folder != "NewAddon" || e.Provider != "github" || e.ID != "acme/newaddon" {
+		t.Errorf("entry = %+v", e)
+	}
+	if e.Version != "1.0.0" {
+		t.Errorf("version = %q, want 1.0.0 (read from the installed TOC)", e.Version)
+	}
+	if e.Source != "acme/newaddon" {
+		t.Errorf("source = %q, want acme/newaddon", e.Source)
+	}
+}
+
+// TestCheckUpdates reports an update whose latest version bumps the
+// tracked one.
+func TestCheckUpdates(t *testing.T) {
+	s, _, regPath, mock := newTestCatalogService(t)
+	reg, err := catalog.NewRegistry(regPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Track(catalog.Entry{
+		Folder: "Alpha", Title: "Alpha", Version: "1.0.0",
+		Provider: "github", ID: "acme/alpha", Source: "acme/alpha",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mock.repos["acme/alpha"] = "v2.0.0"
+
+	res, err := s.CheckUpdates()
+	if err != nil {
+		t.Fatalf("CheckUpdates: %v", err)
+	}
+	if len(res.Errors) != 0 {
+		t.Fatalf("errors = %v, want none", res.Errors)
+	}
+	if len(res.Updates) != 1 {
+		t.Fatalf("updates = %d, want 1: %+v", len(res.Updates), res.Updates)
+	}
+	u := res.Updates[0]
+	if u.Folder != "Alpha" || u.CurrentVersion != "1.0.0" || u.LatestVersion != "v2.0.0" ||
+		u.Provider != "github" || u.ID != "acme/alpha" || u.Source != "acme/alpha" {
+		t.Errorf("update = %+v", u)
+	}
+	if u.FlavorMismatch {
+		t.Errorf("flavor_mismatch = true, want false (no game version in repo metadata)")
+	}
+	if _, err := time.Parse(time.RFC3339, res.CheckedAt); err != nil {
+		t.Errorf("checked_at %q is not RFC3339: %v", res.CheckedAt, err)
+	}
+}
+
+// TestCheckUpdatesPartialFailure keeps healthy updates when another
+// entry's provider lookup fails.
+func TestCheckUpdatesPartialFailure(t *testing.T) {
+	s, _, regPath, mock := newTestCatalogService(t)
+	reg, err := catalog.NewRegistry(regPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reg.Track(catalog.Entry{Folder: "Alpha", Title: "Alpha", Version: "1.0.0", Provider: "github", ID: "acme/alpha"})
+	_ = reg.Track(catalog.Entry{Folder: "Broken", Title: "Broken", Version: "1.0.0", Provider: "github", ID: "acme/broken"})
+	mock.repos["acme/alpha"] = "v2.0.0"
+	// acme/broken has no repository metadata: the lookup fails.
+
+	res, err := s.CheckUpdates()
+	if err != nil {
+		t.Fatalf("CheckUpdates: %v", err)
+	}
+	if len(res.Updates) != 1 || res.Updates[0].Folder != "Alpha" {
+		t.Fatalf("updates = %+v, want only Alpha", res.Updates)
+	}
+	if len(res.Errors) != 1 {
+		t.Fatalf("errors = %v, want the Broken lookup failure", res.Errors)
+	}
+}
+
+// TestApplyUpdate applies one pending update and checks the folder
+// and registry are refreshed.
+func TestApplyUpdate(t *testing.T) {
+	s, addonsDir, regPath, mock := newTestCatalogService(t)
+	reg, err := catalog.NewRegistry(regPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Track(catalog.Entry{
+		Folder: "Questie", Title: "Questie", Version: "9.0.0",
+		Provider: "github", ID: "acme/questie", Source: "acme/questie",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mock.repos["acme/questie"] = "v9.2.0"
+	mock.zips["acme/questie"] = addonZipBytes(t, "Questie", "## Title: Questie\n## Version: 9.2.0\n## Interface: 30300\n")
+
+	batch, err := s.ApplyUpdate("Questie", true)
+	if err != nil {
+		t.Fatalf("ApplyUpdate: %v", err)
+	}
+	if batch.AppliedCount != 1 || batch.FailedCount != 0 || len(batch.Applied) != 1 {
+		t.Fatalf("batch = %+v, want 1 applied / 0 failed", batch)
+	}
+	if a := batch.Applied[0]; !a.OK || a.Folder != "Questie" || a.Error != "" {
+		t.Errorf("applied entry = %+v", batch.Applied[0])
+	}
+	toc, err := os.ReadFile(filepath.Join(addonsDir, "Questie", "Questie.toc"))
+	if err != nil {
+		t.Fatalf("read updated TOC: %v", err)
+	}
+	if !strings.Contains(string(toc), "## Version: 9.2.0") {
+		t.Errorf("Questie TOC not updated: %s", toc)
+	}
+	reg, err = catalog.NewRegistry(regPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries := reg.Entries(); len(entries) != 1 || entries[0].Version != "9.2.0" {
+		t.Errorf("registry after update = %+v", entries)
+	}
+}
+
+// TestApplyUpdateDeclinesReplace skips the update when allowReplace
+// is false and the folder exists.
+func TestApplyUpdateDeclinesReplace(t *testing.T) {
+	s, _, regPath, mock := newTestCatalogService(t)
+	reg, err := catalog.NewRegistry(regPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reg.Track(catalog.Entry{
+		Folder: "Questie", Title: "Questie", Version: "9.0.0",
+		Provider: "github", ID: "acme/questie", Source: "acme/questie",
+	})
+	mock.repos["acme/questie"] = "v9.2.0"
+
+	batch, err := s.ApplyUpdate("Questie", false)
+	if err != nil {
+		t.Fatalf("ApplyUpdate: %v", err)
+	}
+	if batch.FailedCount != 1 || len(batch.Applied) != 1 {
+		t.Fatalf("batch = %+v, want 1 failed", batch)
+	}
+	a := batch.Applied[0]
+	if a.OK {
+		t.Error("entry should not be applied")
+	}
+	if a.Message != "folder already exists, replace declined" {
+		t.Errorf("message = %q, want the replace-declined message", a.Message)
+	}
+}
+
+// TestApplyUpdateNotFound reports a failed entry with a clear message
+// when no update matches the folder.
+func TestApplyUpdateNotFound(t *testing.T) {
+	s, _, _, _ := newTestCatalogService(t)
+	batch, err := s.ApplyUpdate("Missing", true)
+	if err != nil {
+		t.Fatalf("ApplyUpdate: %v", err)
+	}
+	if batch.FailedCount != 1 || len(batch.Applied) != 1 {
+		t.Fatalf("batch = %+v, want 1 failed", batch)
+	}
+	if batch.Applied[0].OK {
+		t.Error("entry should not be applied")
+	}
+	if !strings.Contains(batch.Applied[0].Message, "Missing") {
+		t.Errorf("message = %q, want it to name the folder", batch.Applied[0].Message)
 	}
 }
