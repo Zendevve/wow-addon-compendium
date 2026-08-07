@@ -272,7 +272,7 @@ function compat(
 }
 
 function seedAddons(): Addon[] {
-  return [
+  const base: Array<Omit<Addon, "tracked" | "drifted">> = [
     {
       folder_name: "Inventory",
       base_name: "Inventory",
@@ -554,6 +554,14 @@ function seedAddons(): Addon[] {
       compat: [compat("BigWigs.toc", 30300)],
     },
   ];
+  // Integrity defaults: untracked by default. Questie is the seeded
+  // tracked addon and drifted, so the scan view shows the modified
+  // badge + Restore button out of the box (mock screenshot workflow).
+  return base.map((a) =>
+    a.folder_name === "Questie"
+      ? { ...a, tracked: true, drifted: true, tracked_source: "Vendethiel/Questie" }
+      : { ...a, tracked: false, drifted: false },
+  );
 }
 
 // Health score mirrors the backend rule: 100 minus 30 per error issue,
@@ -738,6 +746,8 @@ export function createMockService(): Service {
           size_bytes: 2842624,
           fixable: false,
           health: 100,
+          tracked: false,
+          drifted: false,
           toc: {
             path: `${db.install?.addons_dir ?? "C:\\Games\\World of Warcraft Classic\\Interface\\AddOns"}\\WeakAuras\\WeakAuras.toc`,
             name: "WeakAuras",
@@ -848,6 +858,9 @@ export function createMockService(): Service {
           size_bytes: 1048576 + (folder.length % 9) * 262144,
           fixable: false,
           health: 100,
+          tracked: true,
+          drifted: false,
+          tracked_source: src,
           toc: {
             path: `${db.install?.addons_dir ?? "C:\\Games\\World of Warcraft Classic\\Interface\\AddOns"}\\${folder}\\${folder}.toc`,
             name: folder,
@@ -864,6 +877,22 @@ export function createMockService(): Service {
         return { installed: [folder], replaced: [], skipped: [], errors: [] };
       }
       return { installed: [], replaced: [folder], skipped: [], errors: [] };
+    },
+
+    async RestoreAddon(folder: string, allowReplace: boolean): Promise<InstallSourceResult> {
+      await delay(900);
+      const a = db.addons.find((x) => x.folder_name === folder);
+      if (!a || !a.tracked) {
+        return { installed: [], replaced: [], skipped: [], errors: ["addon not tracked in registry"] };
+      }
+      if (!allowReplace) {
+        return { installed: [], replaced: [], skipped: [folder], errors: [] };
+      }
+      // A restore re-downloads the pristine folder: the drift badge
+      // clears and the next scan shows the addon tracked and clean.
+      a.drifted = false;
+      db.scannedAt = new Date().toISOString();
+      return { installed: [folder], replaced: [], skipped: [], errors: [] };
     },
   };
 }

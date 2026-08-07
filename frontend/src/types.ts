@@ -78,6 +78,12 @@ export interface Addon {
   toc: TOC | null;
   issues: Issue[];
   compat: CompatEntry[];
+  /** Installed through the catalog and recorded in the registry. */
+  tracked: boolean;
+  /** Tracked addon whose folder no longer matches the recorded manifest checksum. */
+  drifted: boolean;
+  /** The provider source (URL or owner/repo) the addon was installed from. */
+  tracked_source?: string;
 }
 
 export interface ScanStats {
@@ -205,6 +211,7 @@ export interface Service {
   ApplyAllUpdates(allowReplace: boolean): Promise<ApplyBatch>;
   SearchCatalog(query: string): Promise<SearchCatalogResult>;
   InstallSource(source: string, allowReplace: boolean): Promise<InstallSourceResult>;
+  RestoreAddon(folder: string, allowReplace: boolean): Promise<InstallSourceResult>;
 }
 
 export type View = "setup" | "scan" | "validate" | "install" | "updates" | "catalog";

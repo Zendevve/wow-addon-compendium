@@ -1108,6 +1108,22 @@ body {
 }
 .addon-fix {
   min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Restore: re-download a drifted addon from its recorded source. Amber
+   outline so it reads as an integrity action, not a scan fix. */
+.btn-restore {
+  background: var(--warn-dim);
+  border-color: rgba(226, 166, 62, 0.38);
+  color: var(--warn);
+}
+.btn-restore:not(:disabled):hover {
+  background: rgba(226, 166, 62, 0.2);
+  border-color: rgba(226, 166, 62, 0.6);
+  color: #f0bd63;
 }
 
 /* ---------- scan doctor ---------- */
@@ -1267,6 +1283,21 @@ body {
 .tag-nested {
   color: var(--warn);
   background: var(--warn-dim);
+}
+
+/* Integrity: a tracked addon whose folder no longer matches the
+   recorded manifest checksum. Amber like the other warn tags but with
+   a filled treatment so the drift state reads at a glance. */
+.tag-drifted {
+  color: var(--warn);
+  background: var(--warn-dim);
+  border: 1px solid rgba(226, 166, 62, 0.35);
+}
+
+/* Integrity: tracked and clean — intentionally quiet. */
+.tag-tracked {
+  color: var(--text-3);
+  background: rgba(255, 255, 255, 0.045);
 }
 
 .addon-detail {

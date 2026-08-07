@@ -668,3 +668,144 @@ func TestApplyUpdateNotFound(t *testing.T) {
 		t.Errorf("message = %q, want it to name the folder", batch.Applied[0].Message)
 	}
 }
+
+// TestScanReportsTrackedDrifted seeds the registry with a checksummed
+// entry for a fixture addon and checks the scan DTO reports it
+// tracked and clean, then drifted once a file changes. Entries without
+// a checksum baseline (pre-integrity installs) stay tracked but never
+// drift.
+func TestScanReportsTrackedDrifted(t *testing.T) {
+	s, addonsDir, regPath, _ := newTestCatalogService(t)
+	reg, err := catalog.NewRegistry(regPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum, err := catalog.ComputeManifest(filepath.Join(addonsDir, "AtlasLoot"))
+	if err != nil {
+		t.Fatalf("ComputeManifest: %v", err)
+	}
+	if err := reg.Track(catalog.Entry{
+		Folder: "AtlasLoot", Title: "AtlasLoot", Version: "7.0.4",
+		Provider: "github", ID: "acme/atlasloot", Source: "acme/atlasloot",
+		Checksum: sum,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_ = reg.Track(catalog.Entry{
+		Folder: "Questie", Title: "Questie", Version: "1.12.2",
+		Provider: "github", ID: "acme/questie", Source: "acme/questie",
+	})
+
+	byFolder := func() map[string]Addon {
+		t.Helper()
+		res, err := s.Scan()
+		if err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+		out := map[string]Addon{}
+		for _, a := range res.Addons {
+			out[a.FolderName] = a
+		}
+		return out
+	}
+
+	clean := byFolder()
+	atlas := clean["AtlasLoot"]
+	if !atlas.Tracked || atlas.Drifted || atlas.TrackedSource != "acme/atlasloot" {
+		t.Errorf("AtlasLoot = %+v, want tracked / not drifted / source acme/atlasloot", atlas)
+	}
+	questie := clean["Questie"]
+	if !questie.Tracked || questie.Drifted {
+		t.Errorf("Questie = %+v, want tracked without a checksum baseline, never drifted", questie)
+	}
+	aux := clean["AuxUI"]
+	if aux.Tracked || aux.Drifted || aux.TrackedSource != "" {
+		t.Errorf("AuxUI = %+v, want untracked", aux)
+	}
+
+	// Touching a file inside the tracked folder flips Drifted on the
+	// next scan; the checksum-less entry is unaffected.
+	toc := filepath.Join(addonsDir, "AtlasLoot", "AtlasLoot.toc")
+	f, err := os.OpenFile(toc, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("\n-- tampered\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dirty := byFolder()
+	if a := dirty["AtlasLoot"]; !a.Tracked || !a.Drifted {
+		t.Errorf("AtlasLoot after edit = %+v, want tracked and drifted", a)
+	}
+	if a := dirty["Questie"]; a.Drifted {
+		t.Errorf("Questie without checksum baseline = %+v, want not drifted", a)
+	}
+}
+
+// TestRestoreAddon restores a tracked addon from its recorded source
+// through the mock GitHub provider and checks the folder and registry
+// are refreshed; an untracked folder lands in the DTO errors with a
+// nil Go error.
+func TestRestoreAddon(t *testing.T) {
+	s, addonsDir, regPath, mock := newTestCatalogService(t)
+	reg, err := catalog.NewRegistry(regPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Track(catalog.Entry{
+		Folder: "Questie", Title: "Questie", Version: "1.12.2",
+		Provider: "github", ID: "acme/questie", Source: "acme/questie",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mock.repos["acme/questie"] = "v1.13.0"
+	mock.zips["acme/questie"] = addonZipBytes(t, "Questie", "## Title: Questie\n## Version: 1.13.0\n## Interface: 30300\n")
+
+	// Untracked folder: reported as an error in the DTO, nil Go error.
+	missing, err := s.RestoreAddon("AtlasLoot", true)
+	if err != nil {
+		t.Fatalf("RestoreAddon(untracked): %v", err)
+	}
+	if !slices.Contains(missing.Errors, "addon not tracked in registry") {
+		t.Errorf("errors = %v, want the not-tracked message", missing.Errors)
+	}
+
+	res, err := s.RestoreAddon("Questie", true)
+	if err != nil {
+		t.Fatalf("RestoreAddon: %v", err)
+	}
+	if len(res.Errors) != 0 {
+		t.Fatalf("errors = %v, want none", res.Errors)
+	}
+	if !slices.Contains(res.Installed, "Questie") {
+		t.Errorf("installed = %v, want Questie", res.Installed)
+	}
+	toc, err := os.ReadFile(filepath.Join(addonsDir, "Questie", "Questie.toc"))
+	if err != nil {
+		t.Fatalf("read restored TOC: %v", err)
+	}
+	if !strings.Contains(string(toc), "## Version: 1.13.0") {
+		t.Errorf("Questie TOC not restored: %s", toc)
+	}
+
+	// The catalog re-records the manifest checksum after the restore.
+	reg, err = catalog.NewRegistry(regPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := reg.Entries()
+	if len(entries) != 1 {
+		t.Fatalf("registry entries = %d, want 1: %+v", len(entries), entries)
+	}
+	got, err := catalog.ComputeManifest(filepath.Join(addonsDir, "Questie"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries[0].Checksum != got {
+		t.Errorf("recorded checksum %q != computed %q", entries[0].Checksum, got)
+	}
+}

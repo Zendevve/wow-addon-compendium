@@ -279,6 +279,35 @@ func folderExists(addonsDir, name string) bool {
 	return false
 }
 
+// registryEntries loads the tracked registry entries keyed by lowercase
+// folder. Integrity reporting is best-effort: an unreadable or missing
+// registry yields an empty map so scans never fail over provenance.
+func (s *Service) registryEntries(e *env) map[string]catalog.Entry {
+	path := s.registryPath
+	if path == "" {
+		var err error
+		if path, err = catalog.DefaultPath(); err != nil {
+			return nil
+		}
+	}
+	reg, err := catalog.NewRegistry(path)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]catalog.Entry, len(reg.Entries()))
+	for _, ent := range reg.Entries() {
+		out[strings.ToLower(ent.Folder)] = ent
+	}
+	return out
+}
+
+// trackedEntry returns the registry entry for folder, matched
+// case-insensitively, and whether one exists.
+func (s *Service) trackedEntry(e *env, folder string) (catalog.Entry, bool) {
+	entry, ok := s.registryEntries(e)[strings.ToLower(folder)]
+	return entry, ok
+}
+
 // DTOs ---------------------------------------------------------------------
 
 // AppState is the initial UI snapshot.
@@ -368,6 +397,14 @@ type Addon struct {
 	TOC           *TOC     `json:"toc"`
 	Issues        []Issue  `json:"issues"`
 	Compat        []Compat `json:"compat"`
+	// Tracked reports whether the addon was installed through the
+	// catalog and is recorded in the registry. Drifted reports that a
+	// tracked addon's folder no longer matches the manifest checksum
+	// recorded at install/update time; entries without a recorded
+	// checksum (pre-integrity installs) are never drifted.
+	Tracked       bool   `json:"tracked"`
+	Drifted       bool   `json:"drifted"`
+	TrackedSource string `json:"tracked_source,omitempty"`
 }
 
 // Stats summarizes a scan.
@@ -481,9 +518,23 @@ func (s *Service) toScanResult(e *env, res *models.ScanResult) ScanResult {
 		Errors:    errStrings(res.Errors),
 	}
 	out.Stats.Total, out.Stats.Problems, out.Stats.Errors = res.Stats()
+	tracked := s.registryEntries(e)
 	out.Addons = make([]Addon, 0, len(res.Addons))
 	for _, a := range res.Addons {
-		out.Addons = append(out.Addons, toAddon(a, e.profile))
+		ad := toAddon(a, e.profile)
+		if entry, ok := tracked[strings.ToLower(a.FolderName)]; ok {
+			ad.Tracked = true
+			ad.TrackedSource = entry.Source
+			if entry.Checksum != "" {
+				if sum, err := catalog.ComputeManifest(filepath.Join(res.AddonsDir, a.FolderName)); err == nil {
+					ad.Drifted = sum != entry.Checksum
+				}
+				// A manifest error (folder vanished mid-scan, unreadable
+				// file) leaves Drifted false: best-effort, never fails
+				// the scan.
+			}
+		}
+		out.Addons = append(out.Addons, ad)
 	}
 	return out
 }
@@ -949,6 +1000,15 @@ func (s *Service) InstallSource(source string, allowReplace bool) (InstallResult
 	if err != nil {
 		return InstallResult{}, err
 	}
+	return s.installSource(e, source, allowReplace)
+}
+
+// installSource runs the shared catalog install body: resolve the
+// catalog for the environment, ensure the AddOns directory exists and
+// install from source, mapping the outcome to the InstallResult DTO.
+// Provider failures land in Errors with a nil Go error so the frontend
+// renders them inline.
+func (s *Service) installSource(e *env, source string, allowReplace bool) (InstallResult, error) {
 	cat, err := s.catalogFor(e)
 	if err != nil {
 		return InstallResult{}, err
@@ -971,4 +1031,27 @@ func (s *Service) InstallSource(source string, allowReplace bool) (InstallResult
 		Skipped:   []string{},
 		Errors:    []string{},
 	}, nil
+}
+
+// RestoreAddon re-downloads a tracked addon from the provider source
+// recorded in the registry and replaces its folder, restoring the
+// pristine manifest the registry's checksum records. The catalog layer
+// re-records the fresh checksum after a successful install. An
+// untracked folder is reported in the DTO's Errors with a nil Go
+// error, mirroring InstallSource's error-handling style.
+func (s *Service) RestoreAddon(folder string, allowReplace bool) (InstallResult, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return InstallResult{}, err
+	}
+	entry, ok := s.trackedEntry(e, folder)
+	if !ok {
+		return InstallResult{
+			Installed: []string{},
+			Replaced:  []string{},
+			Skipped:   []string{},
+			Errors:    []string{"addon not tracked in registry"},
+		}, nil
+	}
+	return s.installSource(e, entry.Source, allowReplace)
 }

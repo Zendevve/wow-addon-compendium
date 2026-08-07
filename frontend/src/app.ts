@@ -28,6 +28,7 @@ export interface Actions {
   scan(): Promise<void>;
   fixOne(addon: Addon): Promise<void>;
   fixAll(): Promise<void>;
+  restoreAddon(addon: Addon): Promise<void>;
   setProfile(id: string): Promise<void>;
   validate(): Promise<void>;
   installZip(zipPath: string, allowReplace: boolean): Promise<void>;

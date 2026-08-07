@@ -196,6 +196,36 @@ const actions: Actions = {
     }
   },
 
+  async restoreAddon(addon: Addon): Promise<void> {
+    if (app.busy || !app.state.has_install) return;
+    app.busy = "restore";
+    syncChrome();
+    current?.refresh();
+    try {
+      const res = await service.RestoreAddon(addon.folder_name, true);
+      await rescanAfterMutation();
+      if (res.errors.length > 0) {
+        toast({
+          type: "error",
+          title: "Restore failed",
+          message: res.errors.join(" · "),
+        });
+      } else {
+        toast({
+          type: "ok",
+          title: "Restore complete",
+          message: `${addon.folder_name} re-downloaded from its source`,
+        });
+      }
+    } catch (err) {
+      toast({ type: "error", title: "Restore failed", message: errText(err) });
+    } finally {
+      app.busy = null;
+      syncChrome();
+      current?.refresh();
+    }
+  },
+
   async setProfile(id: string): Promise<void> {
     if (app.busy) return;
     app.busy = "profile";

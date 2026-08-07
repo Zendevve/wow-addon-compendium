@@ -82,7 +82,8 @@ function normalize(name: keyof Service, p: Promise<unknown>): Promise<unknown> {
         c.errors = c.errors ?? [];
         return c;
       }
-      case "InstallSource": {
+      case "InstallSource":
+      case "RestoreAddon": {
         const s = raw as Record<string, unknown>;
         s.installed = s.installed ?? [];
         s.replaced = s.replaced ?? [];
@@ -116,4 +117,6 @@ export const service: Service = {
   SearchCatalog: (query) => call("SearchCatalog", query),
   InstallSource: (source, allowReplace) =>
     call("InstallSource", source, allowReplace),
+  RestoreAddon: (folder, allowReplace) =>
+    call("RestoreAddon", folder, allowReplace),
 };

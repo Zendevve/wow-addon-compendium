@@ -7,6 +7,7 @@ import type { AppState, Actions } from "../app";
 import type { Addon, Issue } from "../types";
 import { ACTION_LABELS, DESTRUCTIVE_ACTIONS, formatBytes } from "../types";
 import { icon, type IconName } from "../icons";
+import { confirmDialog } from "../components/dialog";
 
 type HealthFilter = "all" | "issues" | "healthy";
 
@@ -283,6 +284,23 @@ export function mountScan(
         actions.fixOne(addon);
       });
     });
+    list.querySelectorAll<HTMLElement>("[data-restore]").forEach((btn) => {
+      const addon = filtered[Number(btn.dataset.restore)];
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        void (async () => {
+          const confirmed = await confirmDialog({
+            title: `Restore ${addon.folder_name}?`,
+            message: `Restore ${addon.folder_name} from its source? This re-downloads and replaces the folder.`,
+            details: addon.tracked_source
+              ? [`Source: ${addon.tracked_source}`]
+              : undefined,
+            confirmLabel: "Restore",
+          });
+          if (confirmed) await actions.restoreAddon(addon);
+        })();
+      });
+    });
   };
 
   const toggle = (folder: string): void => {
@@ -303,6 +321,11 @@ export function mountScan(
         ? `<span class="addon-rename mono">→ ${escapeHtml(a.suggested_name)}</span>`
         : "";
     const version = a.toc?.version ? `v${escapeHtml(a.toc.version)}` : "—";
+    const integrityTag = a.tracked
+      ? a.drifted
+        ? `<span class="tag tag-drifted" title="Changed since install — differs from the recorded manifest checksum">${icon("alert", 11)}Modified</span>`
+        : `<span class="tag tag-tracked" title="Installed from ${escapeAttr(a.tracked_source ?? "its provider")}">tracked</span>`
+      : "";
     const fixableIssue = a.issues.find((x) => x.action);
     const destructive = fixableIssue
       ? DESTRUCTIVE_ACTIONS.has(fixableIssue.action)
@@ -314,6 +337,15 @@ export function mountScan(
           fixableIssue.action_label || ACTION_LABELS[fixableIssue.action] || "Fix",
         )}</span></button>`
       : "";
+    const restoreBtn =
+      a.tracked && a.drifted
+        ? `<button class="btn btn-sm btn-restore" data-restore="${i}" ${
+            app.busy ? "disabled" : ""
+          } title="Re-download ${escapeAttr(a.folder_name)} from ${escapeAttr(a.tracked_source ?? "its source")}">${icon(
+            "download",
+            14,
+          )}<span>Restore</span></button>`
+        : "";
     const more = a.issues.length > 1 ? `<span class="addon-more">+${a.issues.length - 1} more</span>` : "";
 
     const detail = isOpen ? renderDetail(a) : "";
@@ -329,6 +361,7 @@ export function mountScan(
           <div class="addon-name-line">
             <span class="addon-name">${escapeHtml(a.folder_name)}</span>
             ${a.nested ? `<span class="tag tag-nested">${icon("flatten", 12)}nested</span>` : ""}
+            ${integrityTag}
             ${rename}
           </div>
           <div class="addon-issue">${issue ? escapeHtml(issue.message) : `<span class="addon-clean">No issues</span>`}${more}</div>
@@ -337,7 +370,7 @@ export function mountScan(
           <span class="addon-ver mono">${version}</span>
           <span class="addon-size mono">${formatBytes(a.size_bytes)}</span>
         </div>
-        <div class="addon-fix">${fixBtn}</div>
+        <div class="addon-fix">${restoreBtn}${fixBtn}</div>
       </div>
       ${detail}`;
   };
