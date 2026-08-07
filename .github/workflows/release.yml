@@ -38,7 +38,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          overwrite: true
+          overwrite_files: true
           generate_release_notes: true
 
   gui:
@@ -79,4 +79,4 @@ jobs:
           files: |
             build/bin/wowfix.exe
             build/bin/wowfix-amd64-installer.exe
-          overwrite: true
+          overwrite_files: true
