@@ -3,7 +3,7 @@
 wowfix.exe
 *.exe
 
-# Generated preview screenshot (regenerate with `wowfix preview`)
+# Preview output from the retired v2 CLI (superseded by screenshots/; ignore rule kept)
 preview.txt
 
 # Logs

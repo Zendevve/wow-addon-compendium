@@ -373,7 +373,7 @@ func TestCheckFlagsGameFamilyMismatch(t *testing.T) {
 		t.Fatalf("Check: %v", err)
 	}
 	// Both updates are reported with their mismatch flag set; skipping
-	// is the caller's decision (UI/CLI), not Check's.
+	// is the caller's decision (the UI), not Check's.
 	if len(updates) != 2 {
 		t.Fatalf("got %d updates, want 2 (both reported): %+v", len(updates), updates)
 	}

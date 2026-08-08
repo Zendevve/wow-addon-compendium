@@ -1,7 +1,6 @@
-// Package gui assembles the Wails v2 application options shared by the
-// entrypoints: the repo-root main.go that `wails build` compiles, and
-// cmd/wowfix-gui. The frontend assets are injected so each entrypoint
-// embeds its own dist directory.
+// Package gui assembles the Wails v2 application options used by the
+// repo-root main.go that `wails build` compiles. The frontend assets
+// are injected so the built binary embeds its own dist directory.
 package gui
 
 import (

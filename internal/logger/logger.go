@@ -1,7 +1,7 @@
 // Package logger provides a small, concurrency-safe logger that keeps
 // a bounded ring buffer of entries in memory and optionally mirrors
-// them to a file. The TUI reads from the buffer; `wowfix logs --export`
-// writes it to disk.
+// them to a file. Entries are readable in memory, and Export writes
+// the current buffer to disk.
 package logger
 
 import (

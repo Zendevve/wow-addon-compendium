@@ -2,8 +2,8 @@
 // addons, TOC files, issues, scan results and game profiles.
 //
 // The types in this package are intentionally free of I/O and UI
-// concerns so they can be shared by the CLI, the TUI and any future
-// API surface (desktop, web, REST).
+// concerns so they can be shared by the GUI and any future API
+// surface (desktop, web, REST).
 package models
 
 import (

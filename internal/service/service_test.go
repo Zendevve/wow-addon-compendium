@@ -2108,7 +2108,7 @@ func TestCuratedNoSetForUnknownFamily(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CLI parity: info / sources / doctor / savedvars / backups / export /
+// Service contract: info / sources / doctor / savedvars / backups / export /
 // import / config. Every method is exercised against temp trees only.
 // ---------------------------------------------------------------------------
 
@@ -2204,7 +2204,7 @@ func TestServiceAddonInfoBareNameAmbiguous(t *testing.T) {
 	}
 }
 
-// TestServiceAddonInfoBareNameNoMatch errors like the CLI.
+// TestServiceAddonInfoBareNameNoMatch errors for an unknown addon.
 func TestServiceAddonInfoBareNameNoMatch(t *testing.T) {
 	s, _, _, _ := newTestCatalogService(t)
 	_, err := s.AddonInfo("zzz-no-such-addon")
@@ -2216,7 +2216,7 @@ func TestServiceAddonInfoBareNameNoMatch(t *testing.T) {
 	}
 }
 
-// TestServiceSources lists the four providers with their exact CLI
+// TestServiceSources lists the four providers with their exact
 // descriptions, in order.
 func TestServiceSources(t *testing.T) {
 	s, _ := newTestService(t)
@@ -2240,9 +2240,9 @@ func TestServiceSources(t *testing.T) {
 	}
 }
 
-// TestServiceDoctor checks the report structure: one check per CLI
-// doctor line, valid statuses, and the deterministic verdicts of a
-// healthy temp install.
+// TestServiceDoctor checks the report structure: one check per doctor
+// line, valid statuses, and the deterministic verdicts of a healthy
+// temp install.
 func TestServiceDoctor(t *testing.T) {
 	s, _ := newTestService(t)
 	s.registryPath = filepath.Join(t.TempDir(), "registry.json")
@@ -2335,7 +2335,7 @@ func savedVarsTestService(t *testing.T) (*Service, string) {
 }
 
 // TestServiceSavedVarsAccountsAndList lists the accounts and one
-// account's files; an empty account picks the first one like the CLI.
+// account's files; an empty account picks the first one.
 func TestServiceSavedVarsAccountsAndList(t *testing.T) {
 	s, _ := savedVarsTestService(t)
 
@@ -2497,7 +2497,7 @@ func TestServiceBackupNowListRestore(t *testing.T) {
 }
 
 // TestServiceExportCollectionJSON exports the on-disk scan as a JSON
-// manifest with the CLI's name, game version and folder list.
+// manifest with the expected name, game version and folder list.
 func TestServiceExportCollectionJSON(t *testing.T) {
 	s, _ := newTestService(t)
 	out := filepath.Join(t.TempDir(), "export.json")
@@ -2780,8 +2780,8 @@ func TestServiceSetConfigKey(t *testing.T) {
 	}
 }
 
-// TestServiceSetConfigKeyValidation rejects bad values with the CLI's
-// error texts.
+// TestServiceSetConfigKeyValidation rejects bad values with the
+// expected error texts.
 func TestServiceSetConfigKeyValidation(t *testing.T) {
 	s, _ := newTestService(t)
 	bad := []struct{ key, value, wantErr string }{

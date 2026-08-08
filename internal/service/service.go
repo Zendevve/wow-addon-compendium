@@ -73,8 +73,8 @@ func New(store *config.Store) *Service {
 	return &Service{store: store, log: logger.New(500), Version: "dev"}
 }
 
-// env bundles the resolved runtime context, mirroring cmd/wowfix's
-// newEnvironment: config, detected install and active profile.
+// env bundles the resolved runtime context: config, detected install
+// and active profile.
 type env struct {
 	store   *config.Store
 	cfg     *config.Config
@@ -178,9 +178,9 @@ func (s *Service) backupRootFor(e *env, addonsDir string) string {
 	return filepath.Join(s.store.Dir(), "backups")
 }
 
-// profilesFor builds the collection manager for the environment,
-// mirroring cmd/wowfix's newProfileManager: collections live at the
-// config override or <config dir>/collections, and the manager gets
+// profilesFor builds the collection manager for the environment:
+// collections live at the config override or <config dir>/collections,
+// and the manager gets
 // the logger plus (when auto_backup is on) a backup manager for
 // pre-switch snapshots.
 func (s *Service) profilesFor(e *env) (*profiles.Manager, error) {
@@ -231,7 +231,7 @@ func (s *Service) installerOptions(e *env, allowReplace bool) installer.Options 
 
 // classifyTOC returns the compatibility verdict for an addon's primary
 // TOC against the profile, or an "unknown" verdict when the addon has
-// no parseable TOC (mirrors cmd/wowfix classifyTOC).
+// no parseable TOC.
 func classifyTOC(a *models.Addon, profile *models.Profile) validator.Compatibility {
 	toc := a.PrimaryTOC()
 	if toc == nil && len(a.TOCs) > 0 {
@@ -258,8 +258,8 @@ func errStrings(errs []error) []string {
 }
 
 // catalogFor builds a catalog wired with the environment's registry,
-// backups, logger, profile and CurseForge API key, mirroring
-// cmd/wowfix's newCatalog. The registry lives at the conventional
+// backups, logger, profile and CurseForge API key. The registry lives
+// at the conventional
 // location: a missing file yields an empty registry, a corrupt one an
 // error.
 func (s *Service) catalogFor(e *env) (*catalog.Catalog, error) {
@@ -1446,7 +1446,7 @@ func (s *Service) applyAllIn(e *env, addonsDir string, allowReplace bool) ApplyB
 // SearchCatalog queries every enabled provider with the same query
 // and returns the merged results. Partial provider failures land in
 // Errors; when every provider fails the error is returned alongside
-// the empty results (matching the CLI).
+// the empty results.
 func (s *Service) SearchCatalog(query string) (SearchResult, error) {
 	e, err := s.requireInstall()
 	if err != nil {
@@ -2149,14 +2149,13 @@ func (s *Service) syncInstalls(e *env, installs []detector.Installation, allowRe
 }
 
 // wtfRoot returns the WTF directory of an installation: the game root
-// plus the flavor subfolder plus WTF (mirrors cmd/wowfix).
+// plus the flavor subfolder plus WTF.
 func wtfRoot(root, flavor string) string {
 	return filepath.Join(root, flavor, "WTF")
 }
 
 // collectionsDirFor resolves where collection files live: the config
-// override, else <config dir>/collections (mirrors cmd/wowfix's
-// collectionsDir).
+// override, else <config dir>/collections.
 func (s *Service) collectionsDirFor(e *env) string {
 	if e.cfg.CollectionsDir != "" {
 		return e.cfg.CollectionsDir
@@ -2171,7 +2170,7 @@ func (s *Service) savedVarsManager(e *env) *savedvars.Manager {
 }
 
 // pickAccount resolves the account for a savedvars call: the requested
-// one, or the first existing one (mirrors cmd/wowfix).
+// one, or the first existing one.
 func pickAccount(m *savedvars.Manager, requested string) (string, error) {
 	if requested != "" {
 		return requested, nil
@@ -2208,7 +2207,7 @@ var (
 // classifySource classifies an addon argument into a provider name and
 // provider-scoped id, mirroring the catalog's parseSource (which is
 // unexported) so `info` needs no catalog API change. It additionally
-// accepts a scheme-less "github.com/owner/repo" form, like the CLI.
+// accepts a scheme-less "github.com/owner/repo" form.
 func classifySource(source string) (string, string, error) {
 	s := strings.TrimSpace(source)
 	if s == "" {
@@ -2356,8 +2355,8 @@ func stripMarkdown(s string) string {
 }
 
 // AddonInfo resolves one addon from a provider source ("owner/repo" or
-// a provider URL) or a bare-name search, mirroring the CLI's `info`
-// command. A bare name with several matches returns them in Matches
+// a provider URL) or a bare-name search. A bare name with several
+// matches returns them in Matches
 // with a nil error so the frontend can disambiguate; exactly one match
 // resolves it. ReleaseNotes is filled for GitHub addons only and is
 // best-effort (empty when they cannot be fetched).
@@ -2434,8 +2433,8 @@ func (s *Service) toInfoResult(addon *catalog.Addon) InfoResult {
 	return out
 }
 
-// Sources lists the catalog providers with their caveats, matching the
-// CLI's `wowfix sources` output exactly. No install is required.
+// Sources lists the catalog providers with their caveats. No install
+// is required.
 func (s *Service) Sources() ([]ProviderInfo, error) {
 	return []ProviderInfo{
 		{Name: "github", Description: "GitHub releases API — unauthenticated, ~60 requests/hour"},
@@ -2445,8 +2444,8 @@ func (s *Service) Sources() ([]ProviderInfo, error) {
 	}, nil
 }
 
-// Doctor runs the environment report the CLI's `wowfix doctor` prints,
-// mapped to one DoctorCheck per output line. A single failing check
+// Doctor runs the environment report, mapped to one DoctorCheck per
+// output line. A single failing check
 // never aborts the report.
 func (s *Service) Doctor() (DoctorReport, error) {
 	e, err := s.env()
@@ -2581,7 +2580,7 @@ func (s *Service) SavedVarsAccounts() ([]string, error) {
 }
 
 // SavedVarsList lists one account's SavedVariables files. An empty
-// account picks the first existing one, mirroring the CLI.
+// account picks the first existing one.
 func (s *Service) SavedVarsList(account string) (SavedVarsListResult, error) {
 	e, err := s.requireInstall()
 	if err != nil {
@@ -2600,7 +2599,7 @@ func (s *Service) SavedVarsList(account string) (SavedVarsListResult, error) {
 }
 
 // SavedVarsBackup backs up one account's SavedVariables to
-// <wtf>/savedvars-backups, the CLI default destination.
+// <wtf>/savedvars-backups, the default destination.
 func (s *Service) SavedVarsBackup(account string) (SavedVarsBackupResult, error) {
 	e, err := s.requireInstall()
 	if err != nil {
@@ -2735,7 +2734,7 @@ func (s *Service) RestoreBackup(id string, allowReplace bool) (RestoreBackupResu
 
 // ExportCollection writes the active install's addon set to outPath as
 // a JSON manifest, YAML manifest or bundle ZIP, dispatching on the
-// extension exactly like the CLI. An empty collectionID exports the
+// extension. An empty collectionID exports the
 // current on-disk state; otherwise the named collection's state. ZIP
 // exports bundle SavedVariables only when includeSavedVars.
 func (s *Service) ExportCollection(outPath, collectionID string, includeSavedVars bool) (ExportResult, error) {
@@ -2773,7 +2772,7 @@ func (s *Service) ExportCollection(outPath, collectionID string, includeSavedVar
 // buildManifestAddons assembles the manifest entries for an export:
 // either the named collection's addons or the current on-disk scan
 // (skipping .disabled and dot-dirs), enriched with registry source
-// information when tracked (mirrors the CLI).
+// information when tracked.
 func (s *Service) buildManifestAddons(e *env, collectionID string) ([]importexport.ManifestAddon, string, error) {
 	tracked := s.registryEntries(e)
 	enrich := func(folder string) importexport.ManifestAddon {
@@ -2839,8 +2838,8 @@ func (s *Service) firstSavedVarsDir(e *env) string {
 
 // ImportCollection installs addons from a manifest (JSON/YAML), a
 // bundle ZIP or a GitHub repo-list URL, dispatching on the argument
-// exactly like the CLI. Importing is gated by the frontend dialog; the
-// method itself never prompts.
+// type. Importing is gated by the frontend dialog; the method itself
+// never prompts.
 func (s *Service) ImportCollection(pathOrURL string) (ImportResult, error) {
 	e, err := s.requireInstall()
 	if err != nil {
@@ -2880,7 +2879,7 @@ func (s *Service) ImportCollection(pathOrURL string) (ImportResult, error) {
 
 // installManifest installs a parsed manifest: remote entries through
 // the catalog, local entries by presence check (a bare manifest has no
-// addon payload to copy). Mirrors the CLI.
+// addon payload to copy).
 func (s *Service) installManifest(e *env, cat *catalog.Catalog, mf *importexport.Manifest) ([]string, error) {
 	var installed []string
 	for _, a := range mf.Addons {
@@ -2898,7 +2897,7 @@ func (s *Service) installManifest(e *env, cat *catalog.Catalog, mf *importexport
 		default:
 			// Local-only entry: a bare manifest has no payload, so the
 			// addon either is already installed or is not part of the
-			// import. Presence is only checked, mirroring the CLI.
+			// import. Presence is only checked.
 			_ = utils.IsDir(filepath.Join(e.install.AddonsPath, a.Folder))
 		}
 	}
@@ -2927,9 +2926,9 @@ func (s *Service) Config() (ConfigView, error) {
 
 const configKeysHelp = "keys: wow_path, flavor, profile, theme, autobackup, confirmations, backups_dir, curseforge_api_key, collection, collections_dir"
 
-// SetConfigKey persists one configuration key with the exact
-// validation of the CLI's `wowfix config set` (mirrors setConfigValue),
-// including the "auto_backup" alias for "autobackup".
+// SetConfigKey persists one configuration key with the same
+// validation as config's setConfigValue, including the "auto_backup"
+// alias for "autobackup".
 func (s *Service) SetConfigKey(key, value string) error {
 	cfg, err := s.store.Load()
 	if err != nil {
