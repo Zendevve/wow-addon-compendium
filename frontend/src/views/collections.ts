@@ -144,7 +144,7 @@ export function mountCollections(
       toast({
         type: "ok",
         title: `Switched to “${c.name}”`,
-        message: res.message || `${res.applied.length} folder${res.applied.length === 1 ? "" : "s"} renamed — backup snapshot taken`,
+        message: res.message || `${res.applied.length} folder${res.applied.length === 1 ? "" : "s"} renamed. Backup snapshot taken`,
       });
       await load();
     } catch (err) {
@@ -401,7 +401,7 @@ export function mountCollections(
           !d
             ? `<div class="detail-loading"><span class="spinner spinner-xs"></span><span>Loading…</span></div>`
             : d.addons.length === 0
-              ? `<p class="detail-empty muted">No addons in this collection yet — capture a loadout from the scan list.</p>`
+              ? `<p class="detail-empty muted">No addons in this collection yet. Capture a loadout from the scan list.</p>`
               : `<div class="collection-addons">${d.addons
                   .map((a) => renderAddonRow(id, a))
                   .join("")}</div>`

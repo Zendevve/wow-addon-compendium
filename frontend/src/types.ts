@@ -173,10 +173,29 @@ export interface TrackedAddon {
   pinned: boolean;
   ignored: boolean;
   installed_at: string;
+  /** True when the addon has a recorded version log (drives the History menu). */
+  has_history: boolean;
 }
 
 export interface TrackedResult {
   addons: TrackedAddon[];
+}
+
+/** One recorded version of a tracked addon, newest first. */
+export interface VersionEntry {
+  version: string;
+  provider?: string;
+  source?: string;
+  /** Provider-scoped reference: GitHub tag or CurseForge file id. */
+  ref?: string;
+  at: string;
+}
+
+/** The recorded version log of one tracked addon. */
+export interface VersionHistoryResult {
+  folder: string;
+  current: string;
+  versions: VersionEntry[];
 }
 
 export interface RollbackResult {
@@ -460,6 +479,8 @@ export interface Service {
   SetAddonPinned(folder: string, pinned: boolean): Promise<void>;
   SetAddonIgnored(folder: string, ignored: boolean): Promise<void>;
   RollbackAddon(folder: string): Promise<RollbackResult>;
+  ListAddonVersions(folder: string): Promise<VersionHistoryResult>;
+  RollbackToVersion(folder: string, version: string): Promise<InstallSourceResult>;
   SearchCatalog(query: string): Promise<SearchCatalogResult>;
   Curated(): Promise<CuratedResult>;
   InstallSource(source: string, allowReplace: boolean): Promise<InstallSourceResult>;
@@ -503,6 +524,7 @@ export interface Service {
 
 export type View =
   | "setup"
+  | "overview"
   | "scan"
   | "doctor"
   | "validate"
@@ -528,7 +550,7 @@ export const ACTION_LABELS: Record<string, string> = {
 };
 
 export function formatBytes(n: number): string {
-  if (n <= 0) return "—";
+  if (n <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB"];
   let i = 0;
   let v = n;

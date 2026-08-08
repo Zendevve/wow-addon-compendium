@@ -578,6 +578,27 @@ type TrackedAddon struct {
 	Pinned      bool   `json:"pinned"`
 	Ignored     bool   `json:"ignored"`
 	InstalledAt string `json:"installed_at"`
+	// HasHistory reports whether the addon has a recorded version log
+	// (drives the UI's History entry state).
+	HasHistory bool `json:"has_history"`
+}
+
+// AddonVersion is one recorded version of a tracked addon, newest
+// first.
+type AddonVersion struct {
+	Version  string `json:"version"`
+	Provider string `json:"provider,omitempty"`
+	Source   string `json:"source,omitempty"`
+	Ref      string `json:"ref,omitempty"`
+	At       string `json:"at"`
+}
+
+// VersionHistoryResult is the recorded version log of one tracked
+// addon, newest first, with the currently installed version.
+type VersionHistoryResult struct {
+	Folder   string         `json:"folder"`
+	Current  string         `json:"current"`
+	Versions []AddonVersion `json:"versions"`
 }
 
 // TrackedResult is the full tracked-addon list.
@@ -1736,6 +1757,7 @@ func (s *Service) TrackedAddons() (TrackedResult, error) {
 			Pinned:      ent.Pinned,
 			Ignored:     ent.Ignored,
 			InstalledAt: ent.InstalledAt.UTC().Format(time.RFC3339),
+			HasHistory:  len(ent.History) > 0,
 		})
 	}
 	return out, nil
@@ -1822,6 +1844,72 @@ func (s *Service) RollbackAddon(folder string) (RollbackResult, error) {
 		Pinned:       true,
 		Message:      fmt.Sprintf("restored from snapshot %s and pinned", restoredFrom),
 	}, nil
+}
+
+// ListAddonVersions returns the recorded version history of one
+// tracked addon, newest first, plus the currently installed version.
+// An untracked folder is an error.
+func (s *Service) ListAddonVersions(folder string) (VersionHistoryResult, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return VersionHistoryResult{}, err
+	}
+	entry, ok := s.trackedEntry(e, folder)
+	if !ok {
+		return VersionHistoryResult{}, fmt.Errorf("addon %q not tracked in registry", folder)
+	}
+	versions := make([]AddonVersion, 0, len(entry.History))
+	for _, h := range entry.History {
+		versions = append(versions, AddonVersion{
+			Version:  h.Version,
+			Provider: h.Provider,
+			Source:   h.Source,
+			Ref:      h.Ref,
+			At:       h.At.UTC().Format(time.RFC3339),
+		})
+	}
+	return VersionHistoryResult{Folder: entry.Folder, Current: entry.Version, Versions: versions}, nil
+}
+
+// RollbackToVersion re-downloads the specific past version of a
+// tracked addon from its provider and replaces the folder, mirroring
+// the update path: the current folder is snapshotted first and the
+// registry entry is re-recorded with a fresh history entry. The
+// version must be addressable by the provider — GitHub tags and
+// CurseForge files are; WowInterface and Tukui serve only the latest
+// and fail with an error wrapping catalog.ErrVersionNotServed — so a
+// rollback never silently installs the latest release. Unknown
+// folders and versions without a recorded history entry are Go
+// errors.
+func (s *Service) RollbackToVersion(folder, version string) (InstallResult, error) {
+	e, err := s.requireInstall()
+	if err != nil {
+		return InstallResult{}, err
+	}
+	cat, err := s.catalogFor(e)
+	if err != nil {
+		return InstallResult{}, err
+	}
+	entry, ok := s.trackedEntry(e, folder)
+	if !ok {
+		return InstallResult{}, fmt.Errorf("addon %q not tracked in registry", folder)
+	}
+	var hist *catalog.VersionHistory
+	for i := range entry.History {
+		if entry.History[i].Version == version {
+			hist = &entry.History[i]
+			break
+		}
+	}
+	if hist == nil {
+		return InstallResult{}, fmt.Errorf("no recorded version %q for %q", version, folder)
+	}
+	backups := backup.New(s.backupRootFor(e, e.install.AddonsPath), s.log)
+	installed, err := catalog.RollbackToVersion(context.Background(), cat, e.install.AddonsPath, entry, *hist, backups, s.log)
+	if err != nil {
+		return InstallResult{}, err
+	}
+	return InstallResult{Installed: []string{installed}, Replaced: []string{}, Skipped: []string{}, Errors: []string{}}, nil
 }
 
 // Collections lists every collection with its addon count and marks

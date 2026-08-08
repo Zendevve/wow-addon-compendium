@@ -53,6 +53,13 @@ type Addon struct {
 	Homepage      string
 	GameVersion   string // best-effort interface family: "vanilla","tbc","wrath","cata","classic","retail",""
 	UpdatedAt     time.Time
+	// VersionRef is the provider-scoped reference of the resolved
+	// version: the GitHub tag name, or the CurseForge file id (as a
+	// string). Empty when the provider cannot address the version
+	// individually. The registry records it into the addon's version
+	// history so a later rollback can re-download exactly this
+	// version.
+	VersionRef string
 
 	// downloadURL is the provider-resolved archive location, set
 	// during Resolve/Latest (and search where derivable). It is
@@ -78,6 +85,28 @@ type Provider interface {
 	// progress is called with bytes done/total; total may be 0 when
 	// the source does not report a length.
 	Download(ctx context.Context, addon *Addon, dest string, progress func(done, total int64)) error
+}
+
+// ErrVersionNotServed marks a rollback that cannot happen because the
+// provider only serves the latest version of an addon. Rollback
+// surfaces this instead of silently installing the latest release.
+var ErrVersionNotServed = errors.New("provider cannot re-download a specific version")
+
+// VersionResolver is implemented by providers that can re-download a
+// specific past version of an addon: GitHub (release tags) and
+// CurseForge (files by display name / file id). Providers that only
+// serve the latest version — WowInterface, Tukui, Wago — do not
+// implement it, so a version rollback reports ErrVersionNotServed.
+type VersionResolver interface {
+	// ResolveVersion resolves addon at the requested version and
+	// returns an *Addon whose Download fetches exactly that version.
+	// version is the provider's version label (a GitHub tag or a
+	// CurseForge file display name); ref, when non-empty, is the
+	// provider-scoped reference recorded in the registry history (the
+	// tag, or the CurseForge file id). A version that no longer
+	// exists is an error: resolution never falls back to a different
+	// release.
+	ResolveVersion(ctx context.Context, addon *Addon, version, ref string) (*Addon, error)
 }
 
 // Provider names.
@@ -331,13 +360,14 @@ func (c *Catalog) installAddon(ctx context.Context, prov Provider, addon *Addon,
 			// leaves Checksum empty rather than failing the install.
 			checksum, _ := ComputeManifest(filepath.Join(addonsDir, folder))
 			if err := c.Reg.Track(Entry{
-				Folder:   folder,
-				Title:    addon.Name,
-				Version:  version,
-				Provider: addon.Provider,
-				ID:       addon.ID,
-				Source:   source,
-				Checksum: checksum,
+				Folder:     folder,
+				Title:      addon.Name,
+				Version:    version,
+				Provider:   addon.Provider,
+				ID:         addon.ID,
+				Source:     source,
+				Checksum:   checksum,
+				VersionRef: addon.VersionRef,
 			}); err != nil {
 				return res.Installed, err
 			}

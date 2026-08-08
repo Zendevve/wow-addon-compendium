@@ -29,18 +29,23 @@
   align-items: center;
   gap: 8px;
   flex: 1;
-  max-width: 560px;
+  max-width: 640px;
   padding: 3px 4px 3px 0;
   background: var(--surface-1);
   border: 1px solid var(--border-field);
   border-radius: var(--r-pill);
   transition:
     border-color 0.15s ease,
-    box-shadow 0.15s ease;
+    box-shadow 0.15s ease,
+    background 0.15s ease;
 }
 .install-bar:focus-within {
   border-color: var(--accent);
   box-shadow: var(--ring-focus);
+}
+.install-bar.dragover {
+  border-color: var(--accent);
+  background: var(--surface-2);
 }
 .install-bar-icon {
   position: absolute;
@@ -703,4 +708,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dropzone.busy .dropzone-icon {
+    animation: none;
+  }
 }

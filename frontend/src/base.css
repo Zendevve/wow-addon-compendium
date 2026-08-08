@@ -27,6 +27,19 @@ body {
   user-select: none;
 }
 
+/* Copyable content stays selectable despite the app-wide none. */
+input,
+textarea,
+select,
+.mono,
+p,
+li,
+td,
+th,
+.path-chip-value {
+  user-select: text;
+}
+
 ::selection {
   background: rgba(0, 153, 255, 0.3);
 }
@@ -90,6 +103,14 @@ body {
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner,
+  .spinner-lg,
+  .spinner-xs {
+    animation: none;
   }
 }
 

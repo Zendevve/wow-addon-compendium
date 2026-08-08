@@ -1,4 +1,4 @@
-// Settings view — config keys editable from the app. Theme, auto-backup and
+// Settings view — config keys editable from the app. Auto-backup and
 // confirmation checkboxes, plus the backups / collections / API-key paths.
 // Every save goes through SetConfigKey; the install-derived keys (wow_path,
 // flavor, profile, collection) are shown read-only with a hint that they are
@@ -9,11 +9,11 @@ import type { ConfigView } from "../types";
 import { icon } from "../icons";
 import { service } from "../api";
 import { toast } from "../components/toast";
+import { mountInstalls } from "./installs";
 
 const TEXT_KEYS = ["backups_dir", "curseforge_api_key", "collections_dir"] as const;
 
 const KEY_LABELS: Record<string, string> = {
-  theme: "Theme",
   auto_backup: "Auto-backup",
   confirmations: "Confirmations",
   backups_dir: "Backups folder",
@@ -25,6 +25,8 @@ const KEY_LABELS: Record<string, string> = {
   collection: "Active collection",
 };
 
+let installsRefresh: (() => void) | null = null;
+
 export function mountSettings(
   el: HTMLElement,
   app: AppState,
@@ -32,10 +34,18 @@ export function mountSettings(
 ): { refresh: () => void } {
   let cfg: ConfigView | null = null;
   let loading = false;
-  let saving: string | null = null; // key currently saving
-  let error: string | null = null; // inline error for the last save
+  let saving: string | null = null;
+  let error: string | null = null;
   let drafts: Record<string, string> = {};
   let refocus: { sel: string; pos: number } | null = null;
+
+  // Persistent installs section element that survives re-renders
+  const installsSection = document.createElement("div");
+  installsSection.className = "settings-section";
+  installsSection.id = "settings-installs-section";
+  installsSection.innerHTML = `<h3 class="detail-title">Installations</h3><div id="settings-installs-mount"></div>`;
+  const installsMountEl = installsSection.querySelector<HTMLElement>("#settings-installs-mount")!;
+  installsRefresh = mountInstalls(installsMountEl, app, actions).refresh;
 
   const rerender = (): void => {
     render();
@@ -114,30 +124,11 @@ export function mountSettings(
       return;
     }
 
-    const themeOptions = ["dark", "light"]
-      .map(
-        (t) =>
-          `<option value="${t}" ${cfg!.theme === t ? "selected" : ""}>${t === "dark" ? "Dark" : "Light"}</option>`,
-      )
-      .join("");
     const textFields = TEXT_KEYS.map((key) => renderTextField(key, cfg!)).join("");
-    const busy = saving !== null;
 
     el.innerHTML = `
       <div class="settings">
         <h2 class="detail-title">Settings</h2>
-        <div class="settings-section">
-          <h3 class="detail-title">Appearance</h3>
-          <div class="field settings-field">
-            <label class="field-label" for="settings-theme">Theme</label>
-            <div class="input-row">
-              <span class="input-icon">${icon("eye", 15)}</span>
-              <select class="input" id="settings-theme" data-theme ${busy ? "disabled" : ""}>
-                ${themeOptions}
-              </select>
-            </div>
-          </div>
-        </div>
 
         <div class="settings-section">
           <h3 class="detail-title">Behavior</h3>
@@ -152,21 +143,24 @@ export function mountSettings(
 
         <div class="settings-section">
           <h3 class="detail-title">Managed elsewhere</h3>
-          <p class="field-hint">These keys come from Setup and Collections — edit them there.</p>
+          <p class="field-hint">These keys come from Setup and Collections. Edit them there.</p>
           <div class="settings-readonly">
-            ${renderReadonly("wow_path", cfg!.wow_path || "—")}
-            ${renderReadonly("flavor", cfg!.flavor || "—")}
-            ${renderReadonly("profile", cfg!.profile || "—")}
-            ${renderReadonly("collection", cfg!.collection || "—")}
+            ${renderReadonly("wow_path", cfg!.wow_path || "n/a")}
+            ${renderReadonly("flavor", cfg!.flavor || "n/a")}
+            ${renderReadonly("profile", cfg!.profile || "n/a")}
+            ${renderReadonly("collection", cfg!.collection || "n/a")}
           </div>
         </div>
 
         ${error ? `<p class="settings-error" role="alert" style="color: var(--error)">${icon("x-circle", 14)}<span>${escapeHtml(error)}</span></p>` : ""}
       </div>`;
 
-    el.querySelector<HTMLSelectElement>("[data-theme]")?.addEventListener("change", (e) => {
-      void save("theme", (e.target as HTMLSelectElement).value);
-    });
+    // Append persistent installs section after settings container is created
+    const settingsContainer = el.querySelector(".settings");
+    if (settingsContainer) {
+      settingsContainer.appendChild(installsSection);
+    }
+
     el.querySelectorAll<HTMLInputElement>("[data-check]").forEach((input) => {
       input.addEventListener("change", () => {
         void save(input.dataset.check ?? "", input.checked ? "true" : "false");
@@ -222,7 +216,7 @@ export function mountSettings(
         <input type="checkbox" class="checkbox" data-check="${key}" ${on ? "checked" : ""} ${saving ? "disabled" : ""} />
         <span class="checkbox-box">${icon("check", 13)}</span>
         <span class="checkbox-text">
-          <span>${label}${savingKey ? " — saving…" : ""}</span>
+          <span>${label}${savingKey ? " (saving…)" : ""}</span>
           <span class="checkbox-hint">${hint}</span>
         </span>
       </label>`;
@@ -237,7 +231,12 @@ export function mountSettings(
   render();
   void load();
 
-  return { refresh: rerender };
+  return {
+    refresh: () => {
+      rerender();
+      installsRefresh?.();
+    },
+  };
 }
 
 /** Config values arrive as JSON strings/bools; SetConfigKey takes strings. */

@@ -136,7 +136,7 @@ export function mountScan(
     toolbar.innerHTML = `
       <div class="search-box">
         <span class="search-icon">${icon("search", 16)}</span>
-        <input class="search-input" type="text" placeholder="Filter addons…" spellcheck="false"
+        <input class="search-input" type="text" placeholder="Filter addons…" spellcheck="false" autocomplete="off"
           value="${escapeAttr(app.filter)}" aria-label="Filter addons" />
         ${
           filterActive
@@ -197,7 +197,7 @@ export function mountScan(
               ? a.issues.length > 0
               : a.issues.length === 0,
         ).length;
-        return `<button class="chip-btn${healthFilter === f.value ? " active" : ""}" data-health="${f.value}">
+        return `<button class="chip-btn${healthFilter === f.value ? " active" : ""}" aria-pressed="${healthFilter === f.value}" data-health="${f.value}">
           ${f.label}<span class="chip-count">${count}</span>
         </button>`;
       }).join("")}
@@ -244,7 +244,7 @@ export function mountScan(
       <div class="empty doctor-healthy">
         <span class="empty-icon doctor-healthy-icon">${icon("check-circle", 28)}</span>
         <h2 class="empty-title">All addons healthy</h2>
-        <p class="empty-sub">Addon Health: ${avg}/100 — ${s.total} addon${s.total === 1 ? "" : "s"}, no issues found.</p>
+        <p class="empty-sub">Addon Health: ${avg}/100. ${s.total} addon${s.total === 1 ? "" : "s"}, no issues found.</p>
         <div class="empty-actions">
           <button class="btn btn-outline" data-rescan>${icon("refresh", 16)}<span>Rescan</span></button>
         </div>
@@ -302,7 +302,7 @@ export function mountScan(
           : `No addons match “${escapeHtml(app.filter)}”`,
         filteredByChip
           ? "Switch to another view to see every addon."
-          : "Try a different filter — it matches folder names, titles and problem messages.",
+          : "Try a different filter. It matches folder names, titles and problem messages.",
         filteredByChip
           ? `<button class="btn btn-outline" data-clear-health>${icon("x", 16)}<span>Show all</span></button>`
           : `<button class="btn btn-outline" data-clear-filter>${icon("x", 16)}<span>Clear filter</span></button>`,
@@ -400,20 +400,20 @@ export function mountScan(
       a.suggested_name && a.suggested_name !== a.folder_name
         ? `<span class="addon-rename mono">→ ${escapeHtml(a.suggested_name)}</span>`
         : "";
-    const version = a.toc?.version ? `v${escapeHtml(a.toc.version)}` : "—";
+    const version = a.toc?.version ? `v${escapeHtml(a.toc.version)}` : "n/a";
     const integrityTag = a.tracked
       ? a.drifted
-        ? `<span class="tag tag-drifted" title="Changed since install — differs from the recorded manifest checksum">${icon("alert", 11)}Modified</span>`
+        ? `<span class="tag tag-drifted" title="Changed since install - differs from the recorded manifest checksum">${icon("alert", 11)}Modified</span>`
         : `<span class="tag tag-tracked" title="Installed from ${escapeAttr(a.tracked_source ?? "its provider")}">tracked</span>`
       : "";
     // Management state, mirroring the registry flags: pin/ignore live in
     // the Updates view, these are read-only indicators.
     const stateTag = [
       a.pinned
-        ? `<span class="tag tag-pinned" title="Pinned — locked at the current version">${icon("lock", 11)}pinned</span>`
+        ? `<span class="tag tag-pinned" title="Pinned - locked at the current version">${icon("lock", 11)}pinned</span>`
         : "",
       a.ignored
-        ? `<span class="tag tag-ignored" title="Ignored — excluded from update management">ignored</span>`
+        ? `<span class="tag tag-ignored" title="Ignored - excluded from update management">ignored</span>`
         : "",
     ].join("");
     const fixableIssue = a.issues.find((x) => x.action);
@@ -489,7 +489,7 @@ export function mountScan(
                   (c) => `<tr>
                     <td class="mono">${escapeHtml(c.toc)}</td>
                     <td class="mono">${c.expected}</td>
-                    <td class="mono">${c.detected > 0 ? c.detected : "—"}</td>
+                    <td class="mono">${c.detected > 0 ? c.detected : "n/a"}</td>
                     <td><span class="status-label status-${c.status}"><span class="status-dot ${dotClass(c.status)}"></span>${escapeHtml(c.label)}</span></td>
                   </tr>`,
                 )
@@ -499,7 +499,7 @@ export function mountScan(
         </section>`
       : "";
     const tocHtml = a.toc
-      ? `<p class="path-line mono">${escapeHtml(a.toc.title)} — ${escapeHtml(a.toc.name)}.toc</p>`
+      ? `<p class="path-line mono">${escapeHtml(a.toc.title)} (${escapeHtml(a.toc.name)}.toc)</p>`
       : "";
     const path = app.scan ? `${app.scan.addons_dir}\\${a.folder_name}` : a.folder_name;
     return `<div class="addon-detail" id="addon-detail-${i}">

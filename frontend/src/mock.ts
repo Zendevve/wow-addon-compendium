@@ -41,6 +41,8 @@ import type {
   SyncResult,
   TrackedResult,
   RollbackResult,
+  VersionEntry,
+  VersionHistoryResult,
   InfoResult,
   ProviderInfo,
   DoctorReport,
@@ -138,10 +140,35 @@ interface MockDB {
   tracked: UpdateEntry[];
   /** Pin/ignore flags per tracked folder, mirroring the registry. */
   trackedState: Record<string, { pinned: boolean; ignored: boolean }>;
+  /** Per-addon version logs, newest first (mirrors the registry history). */
+  history: Record<string, VersionEntry[]>;
   collections: MockCollection[];
   activeCollectionId: string;
   backups: BackupInfo[];
 }
+
+// Version logs seeded per tracked addon. Questie (github) and DBM
+// (curseforge) are addressable; WeakAuras (tukui) serves only the
+// latest version.
+const SEED_HISTORY: Record<string, VersionEntry[]> = {
+  Questie: [
+    { version: "1.12.2", provider: "github", source: "https://github.com/Questie/Questie", ref: "v1.12.2", at: "2026-08-06T14:20:00.000Z" },
+    { version: "1.12.0", provider: "github", source: "https://github.com/Questie/Questie", ref: "v1.12.0", at: "2026-07-30T09:05:00.000Z" },
+    { version: "1.11.4", provider: "github", source: "https://github.com/Questie/Questie", ref: "v1.11.4", at: "2026-07-12T17:40:00.000Z" },
+  ],
+  DeadlyBossMods: [
+    { version: "9.5.2", provider: "curseforge", source: "https://www.curseforge.com/wow/addons/deadly-boss-mods", ref: "29847123", at: "2026-08-05T11:00:00.000Z" },
+    { version: "9.5.0", provider: "curseforge", source: "https://www.curseforge.com/wow/addons/deadly-boss-mods", ref: "29710001", at: "2026-07-28T08:30:00.000Z" },
+  ],
+  WeakAuras: [
+    { version: "5.12.0", provider: "tukui", source: "https://www.tukui.org/addons.php?id=weakauras2", at: "2026-08-04T12:15:00.000Z" },
+    { version: "5.11.9", provider: "tukui", source: "https://www.tukui.org/addons.php?id=weakauras2", at: "2026-07-15T10:00:00.000Z" },
+  ],
+};
+
+// Refs the provider no longer serves: a deleted GitHub tag. Rolling
+// back to such a version fails with the honest not-found error.
+const GONE_REFS = new Set(["v1.11.4"]);
 
 // Seeded collections: "pve" is the active loadout (4 enabled of 6), "pvp"
 // is inactive. SetCollectionAddon toggles `enabled` on the detail rows.
@@ -289,7 +316,7 @@ const TRACKED_UPDATES: UpdateEntry[] = [
   {
     folder: "WeakAuras",
     title: "WeakAuras 2",
-    current_version: "5.12.5",
+    current_version: "5.12.0",
     latest_version: "5.12.5",
     provider: "tukui",
     id: "weakauras2",
@@ -366,7 +393,7 @@ const CATALOG_POOL: CatalogEntry[] = [
     provider: "tukui",
     name: "WeakAuras 2",
     author: "Luxocracy",
-    summary: "Powerful aura display framework — icons, bars, textures and custom code.",
+    summary: "Powerful aura display framework, icons, bars, textures and custom code.",
     latest_version: "5.12.5",
     game_version: "retail",
     id: "weakauras2",
@@ -536,7 +563,7 @@ function seedAddons(): Addon[] {
         issue({
           kind: "multiple-tocs",
           severity: "warn",
-          message: "Multiple TOCs found — pick which one defines this addon",
+          message: "Multiple TOCs found. Pick which one defines this addon",
           suggestion:
             "Atlas.toc, Atlas_Wrath.toc and Atlas_TBC.toc are present; the chosen TOC drives compatibility reporting.",
           action: "resolve-toc",
@@ -812,6 +839,22 @@ function healthOf(a: Addon): number {
   return Math.max(0, h);
 }
 
+// recordVersion prepends a history entry for a tracked addon, newest
+// first, mirroring the registry's bounded version log.
+function recordVersion(db: MockDB, u: UpdateEntry, version: string): void {
+  const history = db.history[u.folder] ?? [];
+  db.history[u.folder] = [
+    {
+      version,
+      provider: u.provider,
+      source: u.source,
+      ref: u.provider === "github" ? `v${version}` : "",
+      at: new Date().toISOString(),
+    },
+    ...history,
+  ];
+}
+
 function freshDB(): MockDB {
   return {
     install: {
@@ -830,6 +873,9 @@ function freshDB(): MockDB {
       DeadlyBossMods: { pinned: false, ignored: true },
       WeakAuras: { pinned: false, ignored: false },
     },
+    history: Object.fromEntries(
+      Object.entries(SEED_HISTORY).map(([k, v]) => [k, v.map((e) => ({ ...e }))]),
+    ),
     collections: SEED_COLLECTIONS.map((c) => ({
       id: c.id,
       name: c.name,
@@ -1064,6 +1110,7 @@ export function createMockService(): Service {
           failed_count: 1,
         };
       }
+      recordVersion(db, u, u.latest_version);
       u.current_version = u.latest_version;
       u.flavor_mismatch = false;
       u.flavor_label = "";
@@ -1079,6 +1126,7 @@ export function createMockService(): Service {
       const applied: ApplyBatch["applied"] = [];
       for (const u of db.tracked) {
         if (u.current_version === u.latest_version) continue;
+        recordVersion(db, u, u.latest_version);
         u.current_version = u.latest_version;
         u.flavor_mismatch = false;
         u.flavor_label = "";
@@ -1111,6 +1159,7 @@ export function createMockService(): Service {
             pinned: st.pinned,
             ignored: st.ignored,
             installed_at: "2026-08-01T09-15-00.000Z",
+            has_history: (db.history[u.folder] ?? []).length > 0,
           };
         }),
       };
@@ -1143,6 +1192,39 @@ export function createMockService(): Service {
         pinned: true,
         message: "restored from snapshot 2026-08-07T10-00-00.000 and pinned",
       };
+    },
+
+    async ListAddonVersions(folder: string): Promise<VersionHistoryResult> {
+      await delay(350);
+      const u = db.tracked.find((x) => x.folder === folder);
+      if (!u) throw new Error(`addon "${folder}" not tracked in registry`);
+      const versions = (db.history[folder] ?? []).map((v) => ({ ...v }));
+      return { folder: u.folder, current: u.current_version, versions };
+    },
+
+    async RollbackToVersion(folder: string, version: string): Promise<InstallSourceResult> {
+      await delay(800);
+      const u = db.tracked.find((x) => x.folder === folder);
+      if (!u) throw new Error(`addon "${folder}" not tracked in registry`);
+      const entry = (db.history[folder] ?? []).find((v) => v.version === version);
+      if (!entry) throw new Error(`no recorded version "${version}" for "${folder}"`);
+      // Providers that only serve the latest version cannot re-download
+      // a past one: the honest error, never a silent latest install.
+      if (u.provider === "wowinterface" || u.provider === "tukui") {
+        throw new Error(
+          `${u.provider} can no longer re-download version "${version}" — only the latest is available`,
+        );
+      }
+      // A recorded ref the provider has since dropped (deleted tag).
+      if (entry.ref && GONE_REFS.has(entry.ref)) {
+        throw new Error(`github: no release or tag "${entry.ref}" for ${u.id}`);
+      }
+      recordVersion(db, u, version);
+      u.current_version = version;
+      u.latest_version = version;
+      u.flavor_mismatch = false;
+      u.flavor_label = "";
+      return { installed: [folder], replaced: [folder], skipped: [], errors: [] };
     },
 
     async SearchCatalog(query: string): Promise<SearchCatalogResult> {
@@ -1242,7 +1324,7 @@ export function createMockService(): Service {
         path,
         name,
         bytes: 2100,
-        applied_hint: `Saved to ${path} — import it in-game via WeakAuras → Import`,
+        applied_hint: `Saved to ${path}. Import it in-game via WeakAuras → Import`,
       };
     },
 
@@ -1292,7 +1374,7 @@ export function createMockService(): Service {
       const applied = c.addons.filter((a) => a.enabled).map((a) => a.folder);
       return {
         applied,
-        message: `Switched to “${c.name}” — ${applied.length} addon folder${applied.length === 1 ? "" : "s"} renamed to match (backup snapshot taken first)`,
+        message: `Switched to “${c.name}”. ${applied.length} addon folder${applied.length === 1 ? "" : "s"} renamed to match (backup snapshot taken first)`,
       };
     },
 
@@ -1390,11 +1472,11 @@ export function createMockService(): Service {
     async Sources(): Promise<ProviderInfo[]> {
       await delay(200);
       return [
-        { name: "github", description: "GitHub releases — owner/repo or repository URL" },
-        { name: "curseforge", description: "CurseForge addon page — addon slug or page URL" },
-        { name: "wowinterface", description: "WoWInterface download page — file info URL" },
-        { name: "tukui", description: "Tukui addon page — addon id or page URL" },
-        { name: "wago", description: "Wago.io — WeakAuras / Plater import strings" },
+        { name: "github", description: "GitHub releases: owner/repo or repository URL" },
+        { name: "curseforge", description: "CurseForge addon page: addon slug or page URL" },
+        { name: "wowinterface", description: "WoWInterface download page: file info URL" },
+        { name: "tukui", description: "Tukui addon page: addon id or page URL" },
+        { name: "wago", description: "Wago.io: WeakAuras / Plater import strings" },
       ];
     },
 

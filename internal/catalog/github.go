@@ -160,6 +160,7 @@ func (p *githubProvider) fetch(ctx context.Context, id string) (*Addon, error) {
 				branch = "main"
 			}
 			addon.LatestVersion = branch + "@HEAD"
+			addon.VersionRef = branch
 			addon.downloadURL = fmt.Sprintf("%s/%s/%s/zip/refs/heads/%s", p.codeload, owner, repo, branch)
 			return addon, nil
 		}
@@ -170,6 +171,7 @@ func (p *githubProvider) fetch(ctx context.Context, id string) (*Addon, error) {
 		return nil, err
 	}
 	addon.LatestVersion = rel.TagName
+	addon.VersionRef = rel.TagName
 	if !rel.PublishedAt.IsZero() {
 		addon.UpdatedAt = rel.PublishedAt
 	}
@@ -210,6 +212,72 @@ func (p *githubProvider) get(ctx context.Context, u string) ([]byte, error) {
 		return nil, &statusError{code: resp.StatusCode, url: u, msg: strings.TrimSpace(string(body))}
 	}
 	return body, nil
+}
+
+// ResolveVersion resolves the addon at a specific release tag: the
+// release's first zip asset when the tag is a release, otherwise the
+// codeload source zip at that tag (validated against the refs API).
+// A tag that no longer exists is an error, so rollback never
+// silently serves a different version. ref, when set, names the tag;
+// otherwise the version string is used.
+func (p *githubProvider) ResolveVersion(ctx context.Context, addon *Addon, version, ref string) (*Addon, error) {
+	if addon == nil || addon.ID == "" {
+		return nil, fmt.Errorf("github: missing repository id")
+	}
+	tag := strings.TrimSpace(ref)
+	if tag == "" {
+		tag = strings.TrimSpace(version)
+	}
+	if tag == "" {
+		return nil, fmt.Errorf("github: no version or ref to resolve for %s", addon.ID)
+	}
+	owner, repo, err := splitRepo(addon.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	relURL := fmt.Sprintf("%s/repos/%s/%s/releases/tags/%s", p.api, owner, repo, tag)
+	relBody, relErr := p.get(ctx, relURL)
+	if relErr == nil {
+		var rel ghRelease
+		if err := json.Unmarshal(relBody, &rel); err == nil && rel.TagName != "" {
+			a := &Addon{
+				Provider:      ProviderGitHub,
+				ID:            addon.ID,
+				Name:          addon.Name,
+				LatestVersion: rel.TagName,
+				VersionRef:    rel.TagName,
+			}
+			if !rel.PublishedAt.IsZero() {
+				a.UpdatedAt = rel.PublishedAt
+			}
+			for _, as := range rel.Assets {
+				if strings.HasSuffix(strings.ToLower(as.Name), ".zip") {
+					a.downloadURL = as.BrowserDownloadURL
+					break
+				}
+			}
+			if a.downloadURL == "" {
+				a.downloadURL = fmt.Sprintf("%s/%s/%s/zip/refs/tags/%s", p.codeload, owner, repo, tag)
+			}
+			return a, nil
+		}
+	}
+
+	// Not a release: serve the source zip at the tag when the tag
+	// exists at all.
+	refURL := fmt.Sprintf("%s/repos/%s/%s/git/ref/tags/%s", p.api, owner, repo, tag)
+	if _, err := p.get(ctx, refURL); err == nil {
+		return &Addon{
+			Provider:      ProviderGitHub,
+			ID:            addon.ID,
+			Name:          addon.Name,
+			LatestVersion: tag,
+			VersionRef:    tag,
+			downloadURL:   fmt.Sprintf("%s/%s/%s/zip/refs/tags/%s", p.codeload, owner, repo, tag),
+		}, nil
+	}
+	return nil, fmt.Errorf("github: no release or tag %q for %s", tag, addon.ID)
 }
 
 // Download fetches the archive the addon points at (the latest

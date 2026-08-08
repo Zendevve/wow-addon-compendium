@@ -118,22 +118,9 @@
 .nav {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-5);
+  gap: 2px;
   overflow-y: auto;
   min-height: 0;
-}
-.nav-group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.nav-label {
-  padding: 0 var(--sp-2) var(--sp-1);
-  font-size: var(--micro);
-  font-weight: 600;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--ink-faint);
 }
 .nav-item {
   display: flex;
@@ -204,7 +191,6 @@
 }
 .app.collapsed .brand-name,
 .app.collapsed .brand-ver,
-.app.collapsed .nav-label,
 .app.collapsed .nav-item-label,
 .app.collapsed .nav-badge {
   display: none;
@@ -240,6 +226,55 @@
 }
 .app.collapsed .sidebar-collapse {
   width: 32px;
+}
+
+/* ---------- overview (default landing: segmented health workflows) ---------- */
+
+.overview {
+  display: flex;
+  flex-direction: column;
+}
+.overview-segmented {
+  display: inline-flex;
+  gap: 2px;
+  margin: 14px 20px 12px;
+  padding: 2px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-pill);
+  background: var(--surface-1);
+}
+.overview-seg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--ink-muted);
+  font: inherit;
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  letter-spacing: var(--caption-ls);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease;
+}
+.overview-seg:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.overview-seg.active {
+  background: var(--surface-2);
+  color: var(--ink);
+  border-color: var(--hairline);
+}
+.overview-seg:focus-visible {
+  outline: none;
+  box-shadow: var(--ring-focus);
 }
 
 /* ---------- main ---------- */

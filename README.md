@@ -160,23 +160,29 @@ GOOS=darwin  GOARCH=arm64 go build -o wowfix      ./cmd/wowfix
 ### Desktop GUI
 
 The primary interface is a Windows desktop app built with
-[Wails v2](https://wails.io) on WebView2:
+Wails v2 (https://wails.io) on WebView2:
 
 ```sh
 wails build   # -> build/bin/wowfix.exe
 ```
 
-- **Scan & fix** — the same scan/fix engine as the CLI: every addon with its
-  issues and compatibility verdict, fix one addon or all at once.
-- **Validate** — per-addon TOC compatibility table (expected vs detected
-  interface) against the active game profile.
-- **Install** — pick or drop a `.zip` archive and install it with replace
-  confirmation.
-- **Installation picker** — auto-detected WoW installs, or paste a path; the
-  chosen install and profile are remembered in the same config file the CLI
-  uses.
-- Destructive actions confirm in the UI and follow the
-  [safety model](#safety-model) below (backups first, trash, never delete).
+The GUI uses a 6-destination sidebar:
+
+- **Overview** — health workflows behind a segmented control: **Scan** (scan & fix), **Doctor** (environment diagnostics), **Validation** (TOC compatibility table).
+- **Updates** — primary "Update all"; per-row Update with ⋯ overflow menu (Pin/Ignore/History…/Rollback); a Managed section for tracked addons with explicit Pin/Ignore/Rollback buttons. "History…" opens a per-addon version log (newest first, Current marker) with per-row Rollback that re-downloads that exact version from the provider (GitHub tags, CurseForge files); providers that only serve the latest (WowInterface, Tukui) show an honest "can no longer re-download version X" error.
+- **Catalog** — single install surface: search, URL/owner-repo install bar, **Browse…** for local ZIPs, drag-drop ZIPs onto the bar; curated band; provider filters; info panel; Wago import.
+- **Collections** — named addon loadouts with enable toggles.
+- **Backups** — backup list + Snapshot section (export JSON → Copy; paste → offline Check diff).
+- **Settings** — Behavior, Paths & API key, Managed elsewhere, plus an **Installations** section (per-install cards: health, stats, Scan / Set as active, Update all installs).
+
+A command palette opens with **Ctrl+K** (or **Ctrl+P**) — searchable actions to navigate any destination or run primary actions (Scan now, Fix all problems, Run diagnostics, Validate addons, Check for updates, Update all addons, Create backup, Refresh current view). A muted "Ctrl+K" chip sits at the right end of the statusbar. Navigation uses ArrowUp/Down + Enter + Esc.
+
+**SavedVariables** is reachable via deep link `?view=savedvars`: account picker, file list — listing an account's files automatically creates one backup per account per session (toast with the path); the manual Back up button always works; failed auto-backups are retried on the next successful list. Restore/Reset/Migrate behind an "Advanced operations" disclosure.
+
+All deep links (`?view=scan, doctor, validate, install, installs, savedvars, exportimport, updates, catalog, collections, backups, settings, overview`) still mount every surface — the mock screenshot workflow (`?mock=1&view=<view>`) is unchanged.
+
+Destructive actions confirm in the UI and follow the
+[safety model](#safety-model) below (backups first, trash, never delete).
 
 ### CLI
 
@@ -190,6 +196,8 @@ wowfix validate               validate TOC compatibility
 wowfix list                   list addons with status
 wowfix search <query>         search the addon catalog
 wowfix update [--yes]         check and apply addon updates
+wowfix history <folder> [--json]  show per-addon version history (newest first, Current marker)
+wowfix rollback <folder> <version>  rollback an addon to a specific version (re-downloads from provider)
 wowfix snapshot export|check <file>  export/check an offline catalog snapshot (export online, check offline)
 wowfix sources                list catalog providers and their caveats
 wowfix curated list [--flavor <family>]  list curated private-server addons for a game family

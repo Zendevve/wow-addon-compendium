@@ -8,6 +8,7 @@ import type {
   CatalogEntry,
   SearchCatalogResult,
   InstallSourceResult,
+  InstallResult,
   WagoImportResult,
   CuratedAddon,
   CuratedResult,
@@ -20,6 +21,11 @@ import { icon, type IconName } from "../icons";
 import { service } from "../api";
 import { toast } from "../components/toast";
 import { confirmDialog } from "../components/dialog";
+import {
+  pickZipPath,
+  startZipInstall,
+  startZipInstallFromFile,
+} from "./install";
 
 // `matches` on InfoResult is the candidate list for an ambiguous bare-name
 // lookup (the CLI's `wowfix info` search hits). Only provider/name/id are
@@ -28,6 +34,25 @@ interface InfoMatch {
   provider?: string;
   id?: string;
   name?: string;
+}
+
+// Unified install outcome for the result panel: both the catalog-source
+// flow (InstallSourceResult, name arrays) and the ZIP flow (InstallResult,
+// counts) normalize onto these counts.
+interface InstallSummary {
+  installed: number;
+  replaced: number;
+  skipped: number;
+  errors: string[];
+}
+
+function summaryOfSource(r: InstallSourceResult): InstallSummary {
+  return {
+    installed: r.installed.length,
+    replaced: r.replaced.length,
+    skipped: r.skipped.length,
+    errors: r.errors,
+  };
 }
 
 const PROVIDER_LABEL: Record<string, string> = {
@@ -93,7 +118,7 @@ export function mountCatalog(
   let searching = false;
   let installing = false;
   let saving = false;
-  let installResult: InstallSourceResult | null = null;
+  let installResult: InstallSummary | null = null;
   let wagoResult: WagoImportResult | null = null;
   let timer = 0;
   let curated: CuratedResult | null = null;
@@ -139,6 +164,7 @@ export function mountCatalog(
   const focusKeyOf = (el: HTMLElement): string | null => {
     if (el.closest(".search-clear") || el.closest("[data-search]")) return "search";
     if (el.closest("[data-source]")) return "source";
+    if (el.closest("[data-browse]")) return "browse";
     const filter = el.closest<HTMLElement>("[data-filter]");
     if (filter) return `filter:${filter.dataset.filter}`;
     if (el.closest("[data-compat-toggle]")) return "compat";
@@ -173,6 +199,8 @@ export function mountCatalog(
     }
     if (key === "source") {
       target = el.querySelector<HTMLInputElement>("[data-source]");
+    } else if (key === "browse") {
+      target = el.querySelector<HTMLElement>("[data-browse]");
     } else if (key === "install") {
       target = el.querySelector<HTMLElement>("[data-install]");
     } else if (key === "sources") {
@@ -224,12 +252,12 @@ export function mountCatalog(
     rerender();
     try {
       const res = await service.InstallSource(source, true);
-      installResult = res;
+      installResult = summaryOfSource(res);
       if (res.errors.length > 0) {
         toast({
           type: "error",
           title: "Install completed with errors",
-          message: `${res.errors.length} error${res.errors.length === 1 ? "" : "s"} — see the result panel`,
+          message: `${res.errors.length} error${res.errors.length === 1 ? "" : "s"}. See the result panel`,
         });
       } else if (res.installed.length > 0) {
         toast({
@@ -247,11 +275,40 @@ export function mountCatalog(
         toast({
           type: "info",
           title: "Already installed",
-          message: "The addon exists and replace is off — nothing was changed.",
+          message: "The addon exists and replace is off. Nothing was changed.",
         });
       }
     } catch (err) {
       toast({ type: "error", title: "Install failed", message: errText(err) });
+    } finally {
+      installing = false;
+      rerender();
+    }
+  };
+
+  // ZIP installs reuse install.ts's flow: native picker (Browse…), HTML
+  // file input, and drag-drop all land here and write the same panel.
+  const installZipPath = async (path: string): Promise<void> => {
+    if (installing) return;
+    installing = true;
+    rerender();
+    try {
+      await startZipInstall(actions, path, false);
+      installResult = app.installResult;
+    } finally {
+      installing = false;
+      rerender();
+    }
+  };
+
+  const installZipFile = async (file: File): Promise<void> => {
+    if (installing) return;
+    installing = true;
+    rerender();
+    try {
+      // False when the file path could not be resolved (install.ts toasts).
+      const started = await startZipInstallFromFile(actions, file, false);
+      if (started) installResult = app.installResult;
     } finally {
       installing = false;
       rerender();
@@ -300,12 +357,12 @@ export function mountCatalog(
     rerender();
     try {
       const res = await service.InstallSource(addon.source, true);
-      installResult = res;
+      installResult = summaryOfSource(res);
       if (res.errors.length > 0) {
         toast({
           type: "error",
           title: "Install completed with errors",
-          message: `${res.errors.length} error${res.errors.length === 1 ? "" : "s"} — see the result panel`,
+          message: `${res.errors.length} error${res.errors.length === 1 ? "" : "s"}. See the result panel`,
         });
       } else if (res.installed.length > 0) {
         toast({
@@ -323,7 +380,7 @@ export function mountCatalog(
         toast({
           type: "info",
           title: "Already installed",
-          message: "The addon exists and replace is off — nothing was changed.",
+          message: "The addon exists and replace is off. Nothing was changed.",
         });
       }
     } catch (err) {
@@ -421,7 +478,7 @@ export function mountCatalog(
         <section class="curated" aria-label="Recommended addons">
           <div class="curated-head spotlight">
             <h2 class="curated-title spotlight-title">${icon("shield", 18)}<span>Recommended for ${escapeHtml(curated.label || "your server")}</span></h2>
-            <p class="curated-context spotlight-sub">Curated addon sets for private servers — installed from verified sources.</p>
+            <p class="curated-context spotlight-sub">Curated addon sets for private servers, installed from verified sources.</p>
           </div>
           <div class="curated-rows">
             ${curated.addons
@@ -452,7 +509,7 @@ export function mountCatalog(
         <div class="catalog-toolbar">
           <div class="search-box search-box-lg">
             <span class="search-icon">${icon("search", 16)}</span>
-            <input class="search-input" type="text" placeholder="Search addons by name, author or summary…" spellcheck="false"
+            <input class="search-input" type="text" placeholder="Search addons by name, author or summary…" spellcheck="false" autocomplete="off"
               value="${escapeAttr(query)}" aria-label="Search addon catalog" data-search />
             ${
               query
@@ -460,14 +517,17 @@ export function mountCatalog(
                 : ""
             }
           </div>
-          <div class="install-bar">
+          <div class="install-bar" data-install-bar>
             <span class="install-bar-icon">${icon("download", 16)}</span>
-            <input class="install-bar-input" type="text" placeholder="Install from URL or owner/repo…" spellcheck="false"
+            <input class="install-bar-input" type="text" placeholder="Install from URL or owner/repo…" spellcheck="false" autocomplete="off"
               value="" aria-label="Install from URL or owner/repo" data-source />
             <button class="btn btn-primary" data-install ${installing ? "disabled" : ""}>
               ${installing ? `<span class="spinner"></span>` : icon("package", 15)}
               <span>${installing ? "Installing…" : "Install"}</span>
             </button>
+            <button class="btn btn-outline" data-browse ${installing ? "disabled" : ""}
+              title="Install a local addon ZIP archive">${icon("folder", 15)}<span>Browse…</span></button>
+            <input type="file" class="file-input" accept=".zip,application/zip,application/x-zip-compressed" hidden />
           </div>
         </div>
 
@@ -478,7 +538,7 @@ export function mountCatalog(
             ? `<div class="catalog-chips" role="group" aria-label="Filter results">
                 ${FILTERS.map(
                   (f) => `
-                  <button class="chip-btn${provider === f.value ? " active" : ""}" data-filter="${f.value}">
+                  <button class="chip-btn${provider === f.value ? " active" : ""}" aria-pressed="${provider === f.value}" data-filter="${f.value}">
                     ${f.label}
                     ${f.value === "all" ? `<span class="chip-count">${results.length}</span>` : `<span class="chip-count">${results.filter((r) => r.provider === f.value).length}</span>`}
                   </button>`,
@@ -509,9 +569,9 @@ export function mountCatalog(
                 <div class="result-summary">
                   <span class="result-summary-icon tile-ok">${icon("check-circle", 16)}</span>
                   <span class="result-summary-text">
-                    <b>${installResult.installed.length} installed</b>
-                    ${installResult.replaced.length ? ` · ${installResult.replaced.length} replaced` : ""}
-                    ${installResult.skipped.length ? ` · ${installResult.skipped.length} skipped` : ""}
+                    <b>${installResult.installed} installed</b>
+                    ${installResult.replaced ? ` · ${installResult.replaced} replaced` : ""}
+                    ${installResult.skipped ? ` · ${installResult.skipped} skipped` : ""}
                     ${installResult.errors.length ? ` · ${installResult.errors.length} errors` : ""}
                   </span>
                 </div>
@@ -553,7 +613,7 @@ export function mountCatalog(
             ? emptyCard(
                 "search",
                 "Search the addon catalog",
-                "Find addons across GitHub, CurseForge, WowInterface and Tukui — or paste a URL / owner-repo to install directly.",
+                "Find addons across GitHub, CurseForge, WowInterface and Tukui, or paste a URL / owner-repo to install directly.",
                 "",
               )
             : searching
@@ -580,6 +640,8 @@ export function mountCatalog(
 
     const searchInput = el.querySelector<HTMLInputElement>("[data-search]")!;
     const sourceInput = el.querySelector<HTMLInputElement>("[data-source]")!;
+    const installBar = el.querySelector<HTMLElement>("[data-install-bar]")!;
+    const fileInput = el.querySelector<HTMLInputElement>(".file-input")!;
 
     searchInput.addEventListener("input", () => {
       query = searchInput.value;
@@ -615,6 +677,30 @@ export function mountCatalog(
       }
     });
     el.querySelector("[data-install]")?.addEventListener("click", submitSource);
+    el.querySelector("[data-browse]")?.addEventListener("click", async () => {
+      if (installing) return;
+      // Prefer the Wails v2 native dialog (returns a real filesystem path);
+      // fall back to the HTML file input when not running under Wails.
+      const nativePath = await pickZipPath();
+      if (nativePath) void installZipPath(nativePath);
+      else fileInput.click();
+    });
+    fileInput.addEventListener("change", () => {
+      const f = fileInput.files?.[0];
+      if (f) void installZipFile(f);
+      fileInput.value = "";
+    });
+    installBar.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      installBar.classList.add("dragover");
+    });
+    installBar.addEventListener("dragleave", () => installBar.classList.remove("dragover"));
+    installBar.addEventListener("drop", (e) => {
+      e.preventDefault();
+      installBar.classList.remove("dragover");
+      const f = e.dataTransfer?.files?.[0];
+      if (f) void installZipFile(f);
+    });
     el.querySelector("[data-rescan]")?.addEventListener("click", () => {
       void actions.scan().then(() => actions.go("scan"));
     });
@@ -700,7 +786,7 @@ export function mountCatalog(
         <span class="catalog-summary">${escapeHtml(r.summary)}</span>
       </div>
       <div class="catalog-meta">
-        <span class="catalog-ver mono">v${escapeHtml(r.latest_version || "—")}</span>
+        <span class="catalog-ver mono">v${escapeHtml(r.latest_version || "n/a")}</span>
         ${providerChip(r.provider)}
       </div>
       <div class="catalog-action">
@@ -734,21 +820,21 @@ export function mountCatalog(
     const notes = (r.release_notes ?? "").trim();
     return `
       <div class="issue-list">
-        ${infoKv("Provider", r.provider ? providerChip(r.provider) : "—")}
-        ${infoKv("ID", escapeHtml(r.id || "—"), true)}
-        ${infoKv("Author", escapeHtml(r.author || "—"))}
-        ${infoKv("Latest version", escapeHtml(r.latest_version || "—"), true)}
-        ${infoKv("Game version", escapeHtml(r.game_version || "—"))}
-        ${infoKv("Updated", escapeHtml(formatDate(r.updated_at || "") || "—"))}
+        ${infoKv("Provider", r.provider ? providerChip(r.provider) : "n/a")}
+        ${infoKv("ID", escapeHtml(r.id || "n/a"), true)}
+        ${infoKv("Author", escapeHtml(r.author || "n/a"))}
+        ${infoKv("Latest version", escapeHtml(r.latest_version || "n/a"), true)}
+        ${infoKv("Game version", escapeHtml(r.game_version || "n/a"))}
+        ${infoKv("Updated", escapeHtml(formatDate(r.updated_at || "") || "n/a"))}
         ${
           homepage
             ? `<div class="issue-item">
                 <span class="issue-sugg" style="flex:none; width:120px">Homepage</span>
                 <span class="issue-msg"><a href="${escapeAttr(homepage)}" target="_blank" rel="noreferrer">${escapeHtml(homepage)}</a></span>
               </div>`
-            : infoKv("Homepage", "—")
+            : infoKv("Homepage", "n/a")
         }
-        ${infoKv("Summary", escapeHtml(r.summary || "—"))}
+        ${infoKv("Summary", escapeHtml(r.summary || "n/a"))}
         ${
           notes
             ? `<div class="issue-item">
@@ -767,7 +853,7 @@ export function mountCatalog(
     <div class="catalog-row">
       <div class="catalog-info">
         <div class="catalog-name-line">
-          <span class="catalog-name">${escapeHtml(m.name || "—")}</span>
+          <span class="catalog-name">${escapeHtml(m.name || "n/a")}</span>
         </div>
         <span class="catalog-summary mono">${escapeHtml(m.id || "")}</span>
       </div>
@@ -793,7 +879,7 @@ export function mountCatalog(
       head = `<b>“${escapeHtml(infoArg)}” is ambiguous</b>`;
       body = `
         <div class="catalog-info-body">
-          <p class="result-hint">More than one addon matches — choose one to see its details:</p>
+          <p class="result-hint">More than one addon matches. Choose one to see its details:</p>
           <div class="catalog-rows">${infoMatchesOf(info).map(renderInfoMatchRow).join("")}</div>
         </div>`;
     } else if (info) {

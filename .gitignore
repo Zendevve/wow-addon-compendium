@@ -25,3 +25,6 @@ frontend/node_modules/
 
 # Cross-compiled CLI binaries (built for releases, never committed)
 dist/
+
+# Competitor research reference (study material, not source)
+refs/

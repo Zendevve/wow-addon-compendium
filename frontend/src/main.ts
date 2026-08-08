@@ -22,10 +22,12 @@ import type { AppState, Actions } from "./app";
 import { icon, type IconName } from "./icons";
 import { mountToasts, toast } from "./components/toast";
 import { mountDialog, confirmDialog } from "./components/dialog";
+import { mountPalette } from "./components/palette";
 import { mountSetup } from "./views/setup";
 import { mountScan } from "./views/scan";
 import { mountDoctor } from "./views/doctor";
 import { mountValidate } from "./views/validate";
+import { mountOverview } from "./views/overview";
 import { mountInstall } from "./views/install";
 import { mountUpdates } from "./views/updates";
 import { mountCatalog } from "./views/catalog";
@@ -57,21 +59,29 @@ const statusbar = appEl.querySelector<HTMLElement>("#statusbar")!;
 mountToasts(appEl);
 mountDialog(appEl);
 
-// Navigation model: grouped sidebar sections. Groups are a pure
-// decluttering device — order and membership are taste, not contract.
-const NAV: { view: View; label: string; glyph: IconName; group: string }[] = [
-  { view: "scan", label: "Scan", glyph: "list", group: "Overview" },
-  { view: "doctor", label: "Doctor", glyph: "radar", group: "Overview" },
-  { view: "validate", label: "Validation", glyph: "table", group: "Overview" },
-  { view: "updates", label: "Updates", glyph: "refresh", group: "Maintenance" },
-  { view: "catalog", label: "Catalog", glyph: "search", group: "Maintenance" },
-  { view: "install", label: "Install", glyph: "package", group: "Maintenance" },
-  { view: "collections", label: "Collections", glyph: "stack", group: "Data" },
-  { view: "exportimport", label: "Export / Import", glyph: "upload", group: "Data" },
-  { view: "savedvars", label: "Saved Variables", glyph: "file", group: "Data" },
-  { view: "backups", label: "Backups", glyph: "archive", group: "Data" },
-  { view: "installs", label: "Installs", glyph: "grid", group: "System" },
-  { view: "settings", label: "Settings", glyph: "edit", group: "System" },
+// Command palette (Ctrl+K / Ctrl+P). The handler is registered once at
+// startup; openPalette stays a no-op until boot() mounts the palette, and
+// the palette's open() toggles (a second Ctrl+K closes it).
+let openPalette: () => void = () => {};
+document.addEventListener("keydown", (e) => {
+  if (!e.ctrlKey && !e.metaKey) return;
+  const key = e.key.toLowerCase();
+  if (key !== "k" && key !== "p") return;
+  e.preventDefault();
+  openPalette();
+});
+
+// Navigation model: the flat list of primary destinations. Power workflows
+// (scan/doctor/validation live under Overview; install, export/import, saved
+// variables and installs stay reachable via deep links and actions) are
+// deliberately out of the main visual path — order is taste, not contract.
+const NAV: { view: View; label: string; glyph: IconName }[] = [
+  { view: "overview", label: "Overview", glyph: "shield" },
+  { view: "updates", label: "Updates", glyph: "refresh" },
+  { view: "catalog", label: "Catalog", glyph: "search" },
+  { view: "collections", label: "Collections", glyph: "stack" },
+  { view: "backups", label: "Backups", glyph: "archive" },
+  { view: "settings", label: "Settings", glyph: "edit" },
 ];
 
 let app: AppState;
@@ -85,11 +95,11 @@ function boot(): void {
         service.Profiles(),
       ]);
       const requested = new URLSearchParams(window.location.search).get("view");
-      const allowedViews: View[] = ["scan", "doctor", "validate", "install", "updates", "catalog", "collections", "exportimport", "savedvars", "backups", "installs", "settings"];
+      const allowedViews: View[] = ["overview", "scan", "doctor", "validate", "install", "updates", "catalog", "collections", "exportimport", "savedvars", "backups", "installs", "settings"];
       const initialView: View = state.has_install
         ? allowedViews.includes(requested as View)
           ? (requested as View)
-          : "scan"
+          : "overview"
         : "setup";
       app = {
         state,
@@ -107,6 +117,7 @@ function boot(): void {
       renderNav();
       renderStatus();
       mountView();
+      openPalette = mountPalette(appEl, app, actions).open;
     } catch (err) {
       appEl.innerHTML = `<div class="fatal">${icon("x-circle", 26)}
         <h1>Could not start wowfix</h1>
@@ -192,7 +203,7 @@ const actions: Actions = {
         message: `${destructive.length} destructive (move to trash / merge) and ${safe} safe fix${safe === 1 ? "" : "es"} will be applied.`,
         details: [
           "A backup snapshot is created before every change.",
-          "Nothing is deleted permanently — removals go to the OS trash.",
+          "Nothing is deleted permanently. Removals go to the OS trash.",
         ],
         confirmLabel: `Fix All (${fixable.length})`,
         danger: true,
@@ -308,7 +319,7 @@ const actions: Actions = {
         toast({
           type: "error",
           title: "Install completed with errors",
-          message: `${res.errors.length} error${res.errors.length === 1 ? "" : "s"} — see the result panel`,
+          message: `${res.errors.length} error${res.errors.length === 1 ? "" : "s"}. See the result panel`,
         });
       } else if (res.installed > 0) {
         toast({
@@ -326,7 +337,7 @@ const actions: Actions = {
         toast({
           type: "info",
           title: "Already installed",
-          message: "The addon exists and replace is off — nothing was changed.",
+          message: "The addon exists and replace is off. Nothing was changed.",
         });
       }
     } catch (err) {
@@ -429,7 +440,7 @@ function renderHeader(): void {
           ? `<span class="path-chip" title="${escapeAttr(app.state.addons_dir || app.state.wow_path)}">
               ${icon("folder", 14)}<span class="path-chip-value mono">${escapeHtml(app.state.addons_dir || app.state.wow_path)}</span>
             </span>`
-          : `<button class="btn btn-ghost btn-sm" data-setup-link>${icon("folder", 14)}<span>No install configured — set up</span></button>`
+          : `<button class="btn btn-ghost btn-sm" data-setup-link>${icon("folder", 14)}<span>No install configured - set up</span></button>`
       }
     </div>
     <div class="header-right">
@@ -491,30 +502,21 @@ function renderNav(): void {
   const nav = sidebar.querySelector<HTMLElement>("#nav");
   if (!nav) return;
   const problemBadge = app.scan && app.scan.stats.problems > 0 ? app.scan.stats.problems : 0;
-  const groups = new Map<string, typeof NAV>();
-  for (const item of NAV) {
-    const list = groups.get(item.group) ?? [];
-    list.push(item);
-    groups.set(item.group, list);
-  }
-  nav.innerHTML = [...groups.entries()]
-    .map(
-      ([group, items]) => `
-      <div class="nav-group">
-        <span class="nav-label">${group}</span>
-        ${items
-          .map(
-            (t) => `
-          <button class="nav-item${app.view === t.view ? " active" : ""}"${app.view === t.view ? ' aria-current="page"' : ""} data-view="${t.view}">
-            ${icon(t.glyph, 17)}
-            <span class="nav-item-label">${t.label}</span>
-            ${t.view === "scan" && problemBadge ? `<span class="nav-badge">${problemBadge}</span>` : ""}
-          </button>`,
-          )
-          .join("")}
-      </div>`,
-    )
-    .join("");
+  // Scan / Doctor / Validation are Overview's segments; the nav reads
+  // Overview as active while any of them is mounted (deep links bypass
+  // the wrapper and mount those views full-screen).
+  const activeView: View =
+    app.view === "scan" || app.view === "doctor" || app.view === "validate"
+      ? "overview"
+      : app.view;
+  nav.innerHTML = NAV.map(
+    (t) => `
+    <button class="nav-item${t.view === activeView ? " active" : ""}"${t.view === activeView ? ' aria-current="page"' : ""} data-view="${t.view}">
+      ${icon(t.glyph, 17)}
+      <span class="nav-item-label">${t.label}</span>
+      ${t.view === "overview" && problemBadge ? `<span class="nav-badge">${problemBadge}</span>` : ""}
+    </button>`,
+  ).join("");
 
   const items = Array.from(nav.querySelectorAll<HTMLButtonElement>(".nav-item"));
   items.forEach((btn, i) => {
@@ -542,7 +544,7 @@ function renderStatus(): void {
     ? `<span class="status-chip"><span class="status-dot ok"></span>${s.total} addons</span>
        <span class="status-chip"><span class="status-dot warn"></span>${s.problems} with issues</span>
        ${s.errors > 0 ? `<span class="status-chip"><span class="status-dot error"></span>${s.errors} error${s.errors === 1 ? "" : "s"}</span>` : ""}`
-    : `<span class="status-chip">${app.state.has_install ? "Ready — run a scan" : "Set up your WoW install"}</span>`;
+    : `<span class="status-chip">${app.state.has_install ? "Ready - run a scan" : "Set up your WoW install"}</span>`;
 
   statusbar.innerHTML = `
     <div class="statusbar-left">${busyChip}${scanLine}</div>
@@ -555,6 +557,7 @@ function renderStatus(): void {
       }
       ${app.mock ? `<span class="status-chip mock">MOCK</span>` : ""}
       <span class="status-chip mono">v${escapeHtml(app.state.version)}</span>
+      ${app.state.has_install ? `<span class="status-chip mono muted">Ctrl+K</span>` : ""}
     </div>`;
 }
 
@@ -573,6 +576,9 @@ function mountView(): void {
   switch (app.view) {
     case "setup":
       current = mountSetup(content, app, actions);
+      break;
+    case "overview":
+      current = mountOverview(content, app, actions);
       break;
     case "scan":
       current = mountScan(content, app, actions);

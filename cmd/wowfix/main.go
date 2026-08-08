@@ -59,6 +59,8 @@ Usage:
   wowfix info <addon>           show details for an addon (name, URL or owner/repo)
   wowfix update [--yes]         check and apply addon updates
   wowfix update --check         check only; exit code 0 none, 1 updates, 2 check error
+  wowfix history <folder>       show the recorded version log of a tracked addon
+  wowfix rollback <folder> <version>  re-download a specific past version of a tracked addon
   wowfix snapshot export|check <file>  export/check an offline catalog snapshot (export online, check offline)
   wowfix sources                list catalog providers and their caveats
   wowfix curated list [--flavor <family>]  list curated private-server addons for a game family
@@ -150,6 +152,10 @@ func run(args []string) error {
 		return runInfo(rest)
 	case "update":
 		return runUpdate(rest)
+	case "history":
+		return runHistory(rest)
+	case "rollback":
+		return runRollback(rest)
 	case "snapshot":
 		return runSnapshot(rest)
 	case "sources":

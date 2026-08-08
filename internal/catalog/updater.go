@@ -200,13 +200,14 @@ func Apply(ctx context.Context, catalog *Catalog, installDir string, u Update, b
 		// failure records no checksum instead of failing the update.
 		checksum, _ := ComputeManifest(filepath.Join(installDir, folder))
 		if err := catalog.Reg.Track(Entry{
-			Folder:   folder,
-			Title:    title,
-			Version:  version,
-			Provider: latest.Provider,
-			ID:       latest.ID,
-			Source:   u.Entry.Source,
-			Checksum: checksum,
+			Folder:     folder,
+			Title:      title,
+			Version:    version,
+			Provider:   latest.Provider,
+			ID:         latest.ID,
+			Source:     u.Entry.Source,
+			Checksum:   checksum,
+			VersionRef: latest.VersionRef,
 		}); err != nil {
 			return folder, err
 		}

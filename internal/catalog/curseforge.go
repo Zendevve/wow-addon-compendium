@@ -124,6 +124,19 @@ type cfModResponse struct {
 	Data cfMod `json:"data"`
 }
 
+type cfModFileListResponse struct {
+	Data []cfModFile `json:"data"`
+}
+
+// cfLegacyFileItem mirrors one file in the legacy addon file list
+// (/addon/<id>/files). downloadUrl, when present, is the direct
+// archive link for exactly that file.
+type cfLegacyFileItem struct {
+	ID          int    `json:"id"`
+	DisplayName string `json:"displayName"`
+	DownloadURL string `json:"downloadUrl"`
+}
+
 type cfDownloadURLResponse struct {
 	Data string `json:"data"`
 }
@@ -284,10 +297,92 @@ func (p *curseforgeProvider) Latest(ctx context.Context, addon *Addon) (*Addon, 
 
 // ---- download ----
 
+// ResolveVersion resolves the addon at a specific past file: the file
+// whose display name matches version. On the modern Core API the file
+// id is looked up from the mod's file list so Download hits
+// /mods/<id>/files/<fileId>/download-url; on the legacy API the
+// file's own downloadUrl is used. A file that no longer exists is an
+// error, so rollback never silently serves the latest release.
+func (p *curseforgeProvider) ResolveVersion(ctx context.Context, addon *Addon, version, ref string) (*Addon, error) {
+	if addon == nil || addon.ID == "" {
+		return nil, fmt.Errorf("curseforge: missing addon id")
+	}
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return nil, fmt.Errorf("curseforge: no version to resolve for %s", addon.ID)
+	}
+	out := &Addon{Provider: ProviderCurseForge, ID: addon.ID, Name: addon.Name}
+	if p.usingModern() {
+		file, err := p.findModernFile(ctx, addon.ID, version)
+		if err != nil {
+			return nil, err
+		}
+		out.LatestVersion = file.DisplayName
+		out.VersionRef = strconv.Itoa(file.ID)
+		out.fileID = file.ID
+		return out, nil
+	}
+	file, err := p.findLegacyFile(ctx, addon.ID, version)
+	if err != nil {
+		return nil, err
+	}
+	out.LatestVersion = file.DisplayName
+	out.VersionRef = strconv.Itoa(file.ID)
+	if file.DownloadURL != "" {
+		out.downloadURL = file.DownloadURL
+	}
+	return out, nil
+}
+
+// findModernFile walks the modern files endpoint (50 per page, capped
+// at 250 files) for the file whose display name matches version.
+func (p *curseforgeProvider) findModernFile(ctx context.Context, id, version string) (*cfModFile, error) {
+	for index := 0; index < 250; index += 50 {
+		u := fmt.Sprintf("%s/mods/%s/files?index=%d&pageSize=50", p.modern, id, index)
+		body, err := p.do(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+		var resp cfModFileListResponse
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return nil, fmt.Errorf("curseforge: parse file list: %w", err)
+		}
+		if len(resp.Data) == 0 {
+			break
+		}
+		for i := range resp.Data {
+			if resp.Data[i].DisplayName == version {
+				return &resp.Data[i], nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("curseforge: no file named %q for addon %s", version, id)
+}
+
+// findLegacyFile looks the version up in the legacy addon file list.
+func (p *curseforgeProvider) findLegacyFile(ctx context.Context, id, version string) (*cfLegacyFileItem, error) {
+	body, err := p.do(ctx, p.legacy+"/addon/"+id+"/files")
+	if err != nil {
+		return nil, err
+	}
+	var list []cfLegacyFileItem
+	if err := json.Unmarshal(body, &list); err != nil {
+		return nil, fmt.Errorf("curseforge: parse file list: %w", err)
+	}
+	for i := range list {
+		if list[i].DisplayName == version {
+			return &list[i], nil
+		}
+	}
+	return nil, fmt.Errorf("curseforge: no file named %q for addon %s", version, id)
+}
+
 // Download fetches the addon archive. On the modern API the file
 // download URL is looked up first (/mods/<id>/files/<fileId>/
-// download-url) and then fetched; the legacy /download endpoint
-// redirects straight to the zip, which the client follows.
+// download-url) and then fetched; on the legacy endpoint the addon's
+// own download URL is used when set (ResolveVersion pins one),
+// otherwise the /download endpoint, which redirects straight to the
+// latest zip.
 func (p *curseforgeProvider) Download(ctx context.Context, addon *Addon, dest string, progress func(done, total int64)) error {
 	if addon == nil || addon.ID == "" {
 		return fmt.Errorf("curseforge: missing addon id")
@@ -306,6 +401,11 @@ func (p *curseforgeProvider) Download(ctx context.Context, addon *Addon, dest st
 			return fmt.Errorf("curseforge: empty download URL for %s", addon.ID)
 		}
 		return downloadFile(ctx, p.client, resp.Data, dest, progress)
+	}
+	if addon.downloadURL != "" {
+		// A pinned file URL (from ResolveVersion): fetch exactly that
+		// file, never the latest.
+		return downloadFile(ctx, p.client, addon.downloadURL, dest, progress)
 	}
 	err := downloadFile(ctx, p.client, p.legacy+"/addon/"+addon.ID+"/download", dest, progress)
 	if err != nil && !p.usingModern() {
@@ -369,6 +469,7 @@ func addonFromMod(m *cfMod) *Addon {
 			out.GameVersion = gameFamily(f.GameVersions[0])
 		}
 		out.fileID = f.ID
+		out.VersionRef = strconv.Itoa(f.ID)
 	}
 	return out
 }

@@ -67,7 +67,7 @@ export function mountValidate(
                     <td class="cell-addon">${escapeHtml(a.folder_name)}</td>
                     <td class="mono">${escapeHtml(a.toc)}</td>
                     <td class="mono">${a.expected}</td>
-                    <td class="mono">${a.detected > 0 ? a.detected : "—"}</td>
+                    <td class="mono">${a.detected > 0 ? a.detected : "n/a"}</td>
                     <td><span class="status-label status-${a.status}">
                       <span class="status-dot ${dotClass(a.status)}"></span>${escapeHtml(a.label)}
                     </span></td>

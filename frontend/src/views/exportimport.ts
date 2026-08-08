@@ -126,7 +126,7 @@ export function mountExportImport(
           <div class="input-row">
             <span class="input-icon">${icon("download", 15)}</span>
             <input class="input" id="export-out" type="text" placeholder="C:\\path\\to\\export.zip"
-              spellcheck="false" value="${escapeAttr(outPath)}" data-out ${exporting ? "disabled" : ""} />
+              spellcheck="false" autocomplete="off" value="${escapeAttr(outPath)}" data-out ${exporting ? "disabled" : ""} />
           </div>
         </div>
         <div class="field exportimport-field">
@@ -154,7 +154,7 @@ export function mountExportImport(
           </button>
           ${
             exportResult
-              ? `<span class="muted mono">${escapeHtml(exportResult.out)} — ${exportResult.addons} addon${exportResult.addons === 1 ? "" : "s"}${exportResult.collection ? ` · collection ${escapeHtml(exportResult.collection)}` : ""}</span>`
+              ? `<span class="muted mono">${escapeHtml(exportResult.out)}, ${exportResult.addons} addon${exportResult.addons === 1 ? "" : "s"}${exportResult.collection ? ` · collection ${escapeHtml(exportResult.collection)}` : ""}</span>`
               : ""
           }
         </div>
@@ -166,7 +166,7 @@ export function mountExportImport(
             <span class="input-icon">${icon("upload", 15)}</span>
             <input class="input" id="import-src" type="text"
               placeholder="Path to a wowfix export, or a provider URL / owner-repo…"
-              spellcheck="false" value="${escapeAttr(importPath)}" data-import-path ${importing ? "disabled" : ""} />
+              spellcheck="false" autocomplete="off" value="${escapeAttr(importPath)}" data-import-path ${importing ? "disabled" : ""} />
           </div>
           <p class="field-hint">Exports from this app (ZIP), provider URLs and owner/repo sources are accepted.</p>
         </div>
@@ -183,7 +183,7 @@ export function mountExportImport(
                 ${importResult.installed.map((n) => `<span class="tag tag-ok">${escapeHtml(n)}</span>`).join("")}
               </div>`
             : importResult && importResult.installed.length === 0
-              ? `<p class="muted exportimport-installed">Nothing new was installed — the addon may already be present.</p>`
+              ? `<p class="muted exportimport-installed">Nothing new was installed. The addon may already be present.</p>`
               : ""
         }
 

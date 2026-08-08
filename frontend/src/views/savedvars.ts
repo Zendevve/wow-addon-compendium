@@ -20,12 +20,16 @@ export function mountSavedVars(
   let loading = false;
   let busy: string | null = null; // label of the in-flight operation
   let lastCopied: string[] | null = null;
+  // Accounts that have been auto-backed-up this session (per mount).
+  const autoBackedUp = new Set<string>();
   // Text input values survive re-renders through these mirrors.
   let restorePath = "";
   let resetAddon = "";
   let migrateFrom = "";
   let migrateTo = "";
   let migrateAddon = "";
+  // Advanced operations disclosure state
+  let advancedOpen = false;
 
   // Re-renders rebuild the view DOM; these hold the control to re-focus
   // (and, for text inputs, the caret position) after the rebuild.
@@ -73,6 +77,14 @@ export function mountSavedVars(
     rerender();
     try {
       listResult = await service.SavedVarsList(selected);
+      // Auto-backup on first successful list per account per session.
+      if (!autoBackedUp.has(selected)) {
+        busy = null;
+        rerender();
+        if (await backup()) {
+          autoBackedUp.add(selected);
+        }
+      }
     } catch (err) {
       toast({
         type: "error",
@@ -85,8 +97,8 @@ export function mountSavedVars(
     }
   };
 
-  const backup = async (): Promise<void> => {
-    if (busy || !selected) return;
+  const backup = async (): Promise<boolean> => {
+    if (busy || !selected) return false;
     busy = "backup";
     rerender();
     try {
@@ -96,12 +108,14 @@ export function mountSavedVars(
         title: "Saved variables backed up",
         message: res.path,
       });
+      return true;
     } catch (err) {
       toast({
         type: "error",
         title: "Backup failed",
         message: errText(err),
       });
+      return false;
     } finally {
       busy = null;
       rerender();
@@ -158,7 +172,7 @@ export function mountSavedVars(
       toast({
         type: "ok",
         title: "Saved variables reset",
-        message: `${addon} — ${selected}`,
+        message: `${addon}: ${selected}`,
       });
     } catch (err) {
       toast({
@@ -284,63 +298,71 @@ export function mountSavedVars(
               </div>`
         }
 
-        <div class="savedvars-actions-grid">
-          <div class="field">
-            <label class="field-label" for="savedvars-restore-path">Restore from backup</label>
-            <div class="input-row">
-              <span class="input-icon">${icon("download", 15)}</span>
-              <input class="input" id="savedvars-restore-path" type="text" placeholder="Path to a saved-variables backup…"
-                spellcheck="false" value="${escapeAttr(restorePath)}" data-restore-path ${busy ? "disabled" : ""} />
-            </div>
-            <button class="btn btn-danger btn-sm savedvars-inline-btn" data-restore ${busy || !restorePath.trim() ? "disabled" : ""}>
-              ${icon("download", 13)}<span>Restore</span>
-            </button>
-          </div>
+        <button class="btn btn-ghost btn-sm savedvars-advanced-toggle" data-advanced-toggle aria-expanded="${advancedOpen}" aria-controls="savedvars-advanced-body">
+          ${icon(advancedOpen ? "chevron-down" : "chevron-right", 14)}
+          <span>Advanced operations</span>
+        </button>
+        ${advancedOpen
+          ? `<div class="savedvars-advanced-body" id="savedvars-advanced-body">
+              <div class="savedvars-actions-grid">
+                <div class="field">
+                  <label class="field-label" for="savedvars-restore-path">Restore from backup</label>
+                  <div class="input-row">
+                    <span class="input-icon">${icon("download", 15)}</span>
+                    <input class="input" id="savedvars-restore-path" type="text" placeholder="Path to a saved-variables backup…"
+                      spellcheck="false" autocomplete="off" value="${escapeAttr(restorePath)}" data-restore-path ${busy ? "disabled" : ""} />
+                  </div>
+                  <button class="btn btn-danger btn-sm savedvars-inline-btn" data-restore ${busy || !restorePath.trim() ? "disabled" : ""}>
+                    ${icon("download", 13)}<span>Restore</span>
+                  </button>
+                </div>
 
-          <div class="field">
-            <label class="field-label" for="savedvars-reset-addon">Reset addon</label>
-            <div class="input-row">
-              <span class="input-icon">${icon("trash", 15)}</span>
-              <input class="input" id="savedvars-reset-addon" type="text" placeholder="Addon name, e.g. Questie"
-                spellcheck="false" value="${escapeAttr(resetAddon)}" data-reset-addon ${busy ? "disabled" : ""} />
-            </div>
-            <button class="btn btn-danger btn-sm savedvars-inline-btn" data-reset ${busy || !resetAddon.trim() ? "disabled" : ""}>
-              ${icon("trash", 13)}<span>Reset</span>
-            </button>
-          </div>
-        </div>
+                <div class="field">
+                  <label class="field-label" for="savedvars-reset-addon">Reset addon</label>
+                  <div class="input-row">
+                    <span class="input-icon">${icon("trash", 15)}</span>
+                    <input class="input" id="savedvars-reset-addon" type="text" placeholder="Addon name, e.g. Questie"
+                      spellcheck="false" autocomplete="off" value="${escapeAttr(resetAddon)}" data-reset-addon ${busy ? "disabled" : ""} />
+                  </div>
+                  <button class="btn btn-danger btn-sm savedvars-inline-btn" data-reset ${busy || !resetAddon.trim() ? "disabled" : ""}>
+                    ${icon("trash", 13)}<span>Reset</span>
+                  </button>
+                </div>
+              </div>
 
-        <div class="field savedvars-migrate">
-          <label class="field-label" for="savedvars-migrate-to">Migrate saved variables</label>
-          <div class="field-row">
-            <div class="field">
-              <select class="input" id="savedvars-migrate-from" data-migrate-from ${busy ? "disabled" : ""}>
-                ${migrateOptions(migrateFrom)}
-              </select>
-            </div>
-            <div class="field">
-              <select class="input" id="savedvars-migrate-to" data-migrate-to ${busy ? "disabled" : ""}>
-                ${migrateOptions(migrateTo)}
-              </select>
-            </div>
-          </div>
-          <div class="input-row">
-            <span class="input-icon">${icon("merge", 15)}</span>
-            <input class="input" type="text" placeholder="Addon (optional) — empty migrates the whole account"
-              spellcheck="false" value="${escapeAttr(migrateAddon)}" data-migrate-addon ${busy ? "disabled" : ""} />
-          </div>
-          <div class="savedvars-migrate-row">
-            <button class="btn btn-outline btn-sm" data-migrate ${busy || !migrateFrom || !migrateTo || migrateFrom === migrateTo ? "disabled" : ""}>
-              ${busy === "migrate" ? `<span class="spinner spinner-xs"></span>` : icon("merge", 13)}
-              <span>${busy === "migrate" ? "Migrating…" : "Migrate"}</span>
-            </button>
-            ${
-              lastCopied && lastCopied.length
-                ? `<span class="muted">Copied: ${lastCopied.map((f) => `<span class="mono">${escapeHtml(f)}</span>`).join(", ")}</span>`
-                : ""
-            }
-          </div>
-        </div>
+              <div class="field savedvars-migrate">
+                <label class="field-label" for="savedvars-migrate-to">Migrate saved variables</label>
+                <div class="field-row">
+                  <div class="field">
+                    <select class="input" id="savedvars-migrate-from" data-migrate-from ${busy ? "disabled" : ""}>
+                      ${migrateOptions(migrateFrom)}
+                    </select>
+                  </div>
+                  <div class="field">
+                    <select class="input" id="savedvars-migrate-to" data-migrate-to ${busy ? "disabled" : ""}>
+                      ${migrateOptions(migrateTo)}
+                    </select>
+                  </div>
+                </div>
+                <div class="input-row">
+                  <span class="input-icon">${icon("merge", 15)}</span>
+                  <input class="input" type="text" placeholder="Addon (optional) - empty migrates the whole account"
+                    spellcheck="false" autocomplete="off" value="${escapeAttr(migrateAddon)}" data-migrate-addon ${busy ? "disabled" : ""} />
+                </div>
+                <div class="savedvars-migrate-row">
+                  <button class="btn btn-outline btn-sm" data-migrate ${busy || !migrateFrom || !migrateTo || migrateFrom === migrateTo ? "disabled" : ""}>
+                    ${busy === "migrate" ? `<span class="spinner spinner-xs"></span>` : icon("merge", 13)}
+                    <span>${busy === "migrate" ? "Migrating…" : "Migrate"}</span>
+                  </button>
+                  ${
+                    lastCopied && lastCopied.length
+                      ? `<span class="muted">Copied: ${lastCopied.map((f) => `<span class="mono">${escapeHtml(f)}</span>`).join(", ")}</span>`
+                      : ""
+                  }
+                </div>
+              </div>
+            </div>`
+          : ""}
       </div>`;
 
     el.querySelector<HTMLSelectElement>("[data-account]")?.addEventListener("change", (e) => {
@@ -383,6 +405,11 @@ export function mountSavedVars(
       rerender();
     });
     el.querySelector("[data-migrate]")?.addEventListener("click", () => void migrate());
+    el.querySelector("[data-advanced-toggle]")?.addEventListener("click", () => {
+      advancedOpen = !advancedOpen;
+      refocus = { sel: "[data-advanced-toggle]", pos: -1 };
+      rerender();
+    });
     el.querySelector("[data-go-setup]")?.addEventListener("click", () => actions.go("setup"));
   };
 

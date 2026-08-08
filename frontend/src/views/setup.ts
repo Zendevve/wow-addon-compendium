@@ -13,15 +13,34 @@ interface SetupLocal {
   detected: Install[] | null;
   busy: string | null;
   error: string | null;
+  advancedOpen: boolean;
 }
 
 const FLAVORS: { value: string; label: string }[] = [
-  { value: "_retail_", label: "_retail_ — Retail" },
-  { value: "_classic_", label: "_classic_ — Wrath / Cataclysm Classic" },
-  { value: "_classic_era_", label: "_classic_era_ — Classic Era" },
-  { value: "_classic_tbc_", label: "_classic_tbc_ — TBC Classic" },
-  { value: "root", label: "root — addons at the top level" },
+  { value: "_retail_", label: "_retail_ - Retail" },
+  { value: "_classic_", label: "_classic_ - Wrath / Cataclysm Classic" },
+  { value: "_classic_era_", label: "_classic_era_ - Classic Era" },
+  { value: "_classic_tbc_", label: "_classic_tbc_ - TBC Classic" },
+  { value: "root", label: "root - addons at the top level" },
 ];
+
+// Manual path typing: derive the client flavor from a known folder segment.
+// Order matters — the longer segments contain `_classic_` as a substring, so
+// they must be checked first.
+const FLAVOR_SEGMENTS: { segment: string; flavor: string }[] = [
+  { segment: "_classic_era_", flavor: "_classic_era_" },
+  { segment: "_classic_tbc_", flavor: "_classic_tbc_" },
+  { segment: "_retail_", flavor: "_retail_" },
+  { segment: "_classic_", flavor: "_classic_" },
+];
+
+function deriveFlavorFromPath(path: string): string | null {
+  const segments = path.split(/[\\/]/);
+  for (const { segment, flavor } of FLAVOR_SEGMENTS) {
+    if (segments.some((seg) => seg.includes(segment))) return flavor;
+  }
+  return null;
+}
 
 export function mountSetup(
   el: HTMLElement,
@@ -35,6 +54,7 @@ export function mountSetup(
     detected: null,
     busy: null,
     error: null,
+    advancedOpen: false,
   };
 
   const render = (): void => {
@@ -64,7 +84,7 @@ export function mountSetup(
               <li class="feature">
                 <span class="feature-icon">${icon("search", 18)}</span>
                 <span class="feature-text"><span class="feature-title">Deep scan</span>
-                  <span class="feature-desc">Detects 8 common problems — nested folders, GitHub names, missing TOCs and more.</span></span>
+                  <span class="feature-desc">Detects 8 common problems: nested folders, GitHub names, missing TOCs and more.</span></span>
               </li>
               <li class="feature">
                 <span class="feature-icon">${icon("shield", 18)}</span>
@@ -79,7 +99,7 @@ export function mountSetup(
               <li class="feature">
                 <span class="feature-icon">${icon("package", 18)}</span>
                 <span class="feature-text"><span class="feature-title">ZIP install</span>
-                  <span class="feature-desc">Drop an addon archive anywhere in the app — it is extracted, flattened and validated.</span></span>
+                  <span class="feature-desc">Drop an addon archive anywhere in the app. It is extracted, flattened and validated.</span></span>
               </li>
             </ul>
             <span class="setup-version">wowfix v${escapeHtml(app.state.version)}</span>
@@ -120,16 +140,30 @@ export function mountSetup(
                 : ""
             }
 
-            <div class="field-row">
-              <div class="field">
-                <label class="field-label" for="setup-flavor">Client flavor</label>
-                <div class="select-wrap">${icon("chevron-down", 14)}<select id="setup-flavor" class="select">${flavorOptions}</select></div>
-              </div>
-              <div class="field">
-                <label class="field-label" for="setup-profile">Game version</label>
-                <div class="select-wrap">${icon("chevron-down", 14)}<select id="setup-profile" class="select">${profileOptions}</select></div>
-              </div>
-            </div>
+            <section class="setup-advanced" aria-label="Advanced options">
+              <button type="button" class="btn btn-ghost btn-sm" data-setup-advanced-toggle
+                aria-expanded="${local.advancedOpen}" aria-controls="setup-advanced-body">
+                ${icon(local.advancedOpen ? "chevron-down" : "chevron-right", 14)}
+                <span>Advanced options</span>
+                <span class="muted">client flavor &amp; game version</span>
+              </button>
+              ${
+                local.advancedOpen
+                  ? `<div class="setup-advanced-body" id="setup-advanced-body">
+                       <div class="field-row">
+                         <div class="field">
+                           <label class="field-label" for="setup-flavor">Client flavor</label>
+                           <div class="select-wrap">${icon("chevron-down", 14)}<select id="setup-flavor" class="select">${flavorOptions}</select></div>
+                         </div>
+                         <div class="field">
+                           <label class="field-label" for="setup-profile">Game version</label>
+                           <div class="select-wrap">${icon("chevron-down", 14)}<select id="setup-profile" class="select">${profileOptions}</select></div>
+                         </div>
+                       </div>
+                     </div>`
+                  : ""
+              }
+            </section>
 
             ${
               local.error
@@ -145,20 +179,30 @@ export function mountSetup(
       </div>`;
 
     const rootInput = el.querySelector<HTMLInputElement>("#setup-root")!;
-    const flavorSel = el.querySelector<HTMLSelectElement>("#setup-flavor")!;
-    const profileSel = el.querySelector<HTMLSelectElement>("#setup-profile")!;
+    // Selects only exist in the DOM while Advanced is open.
+    const flavorSel = el.querySelector<HTMLSelectElement>("#setup-flavor");
+    const profileSel = el.querySelector<HTMLSelectElement>("#setup-profile");
 
     rootInput.addEventListener("input", () => {
       local.root = rootInput.value.trim();
+      const derived = deriveFlavorFromPath(local.root);
+      if (derived) local.flavor = derived;
       local.detected = null;
       render();
       el.querySelector<HTMLInputElement>("#setup-root")!.focus();
     });
-    flavorSel.addEventListener("change", () => {
+    flavorSel?.addEventListener("change", () => {
       local.flavor = flavorSel.value;
     });
-    profileSel.addEventListener("change", () => {
+    profileSel?.addEventListener("change", () => {
       local.profileId = profileSel.value;
+    });
+
+    el.querySelector("[data-setup-advanced-toggle]")?.addEventListener("click", () => {
+      local.advancedOpen = !local.advancedOpen;
+      render();
+      // Keep focus on the disclosure control across the re-render.
+      el.querySelector<HTMLElement>("[data-setup-advanced-toggle]")?.focus();
     });
 
     el.querySelector("[data-detect]")?.addEventListener("click", async () => {

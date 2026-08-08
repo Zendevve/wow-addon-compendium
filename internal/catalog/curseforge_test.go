@@ -381,3 +381,114 @@ func TestCurseForgeLegacyUnreachableWithoutKey(t *testing.T) {
 		t.Errorf("error should wrap ErrCurseForgeUnavailable, got %v", err)
 	}
 }
+
+func TestCurseForgeModernResolveVersion(t *testing.T) {
+	var ts *httptest.Server
+	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/mods/456/files":
+			if r.URL.Query().Get("pageSize") != "50" {
+				t.Errorf("pageSize = %q, want 50", r.URL.Query().Get("pageSize"))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"data": [
+				{"id": 77, "displayName": "v1.13.4", "fileDate": "2023-03-01T00:00:00Z"},
+				{"id": 66, "displayName": "v1.13.0", "fileDate": "2023-01-15T00:00:00Z"}
+			]}`))
+		case "/mods/456/files/66/download-url":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(fmt.Sprintf(`{"data": %q}`, ts.URL+"/old.zip")))
+		case "/old.zip":
+			w.Write([]byte(cfZip))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	p := newCurseForgeProvider(ts.Client(), "", ts.URL, func() string { return "secret-key" })
+	addon, err := p.ResolveVersion(context.Background(), &Addon{Provider: ProviderCurseForge, ID: "456"}, "v1.13.0", "66")
+	if err != nil {
+		t.Fatalf("ResolveVersion: %v", err)
+	}
+	if addon.LatestVersion != "v1.13.0" {
+		t.Errorf("LatestVersion = %q, want v1.13.0", addon.LatestVersion)
+	}
+	if addon.VersionRef != "66" {
+		t.Errorf("VersionRef = %q, want 66 (file id)", addon.VersionRef)
+	}
+	if addon.fileID != 66 {
+		t.Errorf("fileID = %d, want 66", addon.fileID)
+	}
+	// Download must hit the specific file, not the latest endpoint.
+	dest := t.TempDir() + "/out.zip"
+	if err := p.Download(context.Background(), addon, dest, nil); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	data, _ := os.ReadFile(dest)
+	if string(data) != cfZip {
+		t.Errorf("downloaded %q, want %q", data, cfZip)
+	}
+}
+
+func TestCurseForgeLegacyResolveVersion(t *testing.T) {
+	var ts *httptest.Server
+	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/addon/456/files":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`[
+				{"id": 77, "displayName": "v1.13.4", "downloadUrl": "` + ts.URL + `/current.zip"},
+				{"id": 66, "displayName": "v1.13.0", "downloadUrl": "` + ts.URL + `/old.zip"}
+			]`))
+		case "/old.zip":
+			w.Write([]byte(cfZip))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	p := newCurseForgeProvider(ts.Client(), ts.URL, "", nil) // no key -> legacy
+	addon, err := p.ResolveVersion(context.Background(), &Addon{Provider: ProviderCurseForge, ID: "456"}, "v1.13.0", "66")
+	if err != nil {
+		t.Fatalf("ResolveVersion: %v", err)
+	}
+	if addon.VersionRef != "66" {
+		t.Errorf("VersionRef = %q, want 66", addon.VersionRef)
+	}
+	if addon.downloadURL != ts.URL+"/old.zip" {
+		t.Errorf("downloadURL = %q, want the specific file's downloadUrl", addon.downloadURL)
+	}
+	dest := t.TempDir() + "/out.zip"
+	if err := p.Download(context.Background(), addon, dest, nil); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	data, _ := os.ReadFile(dest)
+	if string(data) != cfZip {
+		t.Errorf("downloaded %q, want %q", data, cfZip)
+	}
+}
+
+func TestCurseForgeResolveVersionMissing(t *testing.T) {
+	var ts *httptest.Server
+	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/mods/456/files":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"data": [{"id": 77, "displayName": "v1.13.4"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	p := newCurseForgeProvider(ts.Client(), "", ts.URL, func() string { return "secret-key" })
+	_, err := p.ResolveVersion(context.Background(), &Addon{Provider: ProviderCurseForge, ID: "456"}, "v9.9.9", "")
+	if err == nil {
+		t.Fatal("ResolveVersion for a missing file should error")
+	}
+	if !strings.Contains(err.Error(), "no file named") {
+		t.Errorf("error = %q, want honest no-file message", err.Error())
+	}
+}

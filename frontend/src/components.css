@@ -803,3 +803,12 @@
   background: var(--surface-2);
   color: var(--ink);
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog-backdrop,
+  .dialog,
+  .toast {
+    animation: none;
+    transition: none;
+  }
+}

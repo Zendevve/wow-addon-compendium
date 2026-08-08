@@ -131,22 +131,22 @@ export function mountInstall(
     // property in some versions; browsers never do. Without a real path the
     // backend has nothing to read, so fail loudly instead of passing a bare
     // filename. Mock mode accepts the name so browser demos keep working.
-    const path =
-      (file as File & { path?: string }).path || (mockActive ? file.name : "");
+    const path = zipPathOf(file);
     if (!path) {
       toast({
         type: "error",
         title: "Could not resolve file path",
-        message: "This build cannot read the file location — use Browse… instead.",
+        message: "This build cannot read the file location. Use Browse… instead.",
       });
       return;
     }
-    startInstallPath(path);
+    pendingFile = path;
+    void startZipInstall(actions, path, allowReplace);
   };
 
   const startInstallPath = (path: string): void => {
     pendingFile = path;
-    void actions.installZip(path, allowReplace);
+    void startZipInstall(actions, path, allowReplace);
   };
 
   render();
@@ -155,7 +155,7 @@ export function mountInstall(
 
 // Wails v2 exposes the native file dialog on the JS runtime; returns the
 // chosen path or null when unavailable or cancelled.
-function pickZipPath(): Promise<string | null> {
+export function pickZipPath(): Promise<string | null> {
   const rt = (window as unknown as {
     runtime?: { OpenFileDialog?: (opts: unknown) => Promise<string | null> };
   }).runtime;
@@ -166,6 +166,46 @@ function pickZipPath(): Promise<string | null> {
     })
     .then((p) => p || null)
     .catch(() => null);
+}
+
+// Resolve the installable path for a picked/dropped File. Wails v2 patches
+// File objects with a real `path` property in some versions; browsers never
+// do. Mock mode accepts the bare name so browser demos keep working.
+// Returns "" when nothing readable was resolved.
+export function zipPathOf(file: File): string {
+  // Wails v2 patches File with a real `path` prop; browsers never do.
+  const wailsFile = file as File & { path?: string };
+  return wailsFile.path || (mockActive ? file.name : "");
+}
+
+// Start a ZIP install from a resolved filesystem path. Resolves when the
+// store finishes; the outcome lands in `app.installResult`.
+export function startZipInstall(
+  actions: Actions,
+  path: string,
+  allowReplace = false,
+): Promise<void> {
+  return actions.installZip(path, allowReplace);
+}
+
+// Start a ZIP install from a File (drop or HTML file input). Resolves the
+// path via zipPathOf, toasts when unresolvable, and resolves to false when
+// nothing was started.
+export function startZipInstallFromFile(
+  actions: Actions,
+  file: File,
+  allowReplace = false,
+): Promise<boolean> {
+  const path = zipPathOf(file);
+  if (!path) {
+    toast({
+      type: "error",
+      title: "Could not resolve file path",
+      message: "This build cannot read the file location. Use Browse… instead.",
+    });
+    return Promise.resolve(false);
+  }
+  return startZipInstall(actions, path, allowReplace).then(() => true);
 }
 
 function basename(p: string): string {

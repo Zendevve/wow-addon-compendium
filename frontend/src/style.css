@@ -3,6 +3,9 @@
 @import "./tokens.css";
 @import "./base.css";
 @import "./components.css";
+@import "./components/menu.css";
+@import "./components/version-modal.css";
+@import "./components/palette.css";
 @import "./shell.css";
 @import "./setup.css";
 @import "./scan.css";

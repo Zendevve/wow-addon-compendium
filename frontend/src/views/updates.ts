@@ -4,18 +4,13 @@
 // confirm dialog before applying, but never block the list.
 
 import type { AppState, Actions } from "../app";
-import type {
-  UpdateEntry,
-  CheckUpdatesResult,
-  ApplyBatch,
-  TrackedAddon,
-  SnapshotResult,
-  SnapshotCheck,
-} from "../types";
+import type { UpdateEntry, CheckUpdatesResult, ApplyBatch, TrackedAddon } from "../types";
 import { icon, type IconName } from "../icons";
 import { service } from "../api";
-import { toast, type ToastOpts } from "../components/toast";
+import { toast } from "../components/toast";
 import { confirmDialog } from "../components/dialog";
+import { attachRowMenu, type MenuItem } from "../components/menu";
+import { openVersionHistory } from "../components/version-modal";
 
 const PROVIDER_LABEL: Record<string, string> = {
   github: "GH",
@@ -32,14 +27,6 @@ const MANAGED_FILTERS: { value: ManagedFilter; label: string }[] = [
   { value: "ignored", label: "Ignored" },
 ];
 
-// Textareas have no stylesheet rules in this design system; the snapshot
-// boxes are themed through the tokens contract inline (canvas field on the
-// charcoal surface, hairline border, mono type).
-const JSON_TEXTAREA_STYLE =
-  "width:100%; box-sizing:border-box; resize:vertical; min-height:130px; " +
-  "background:var(--canvas); color:var(--ink); border:1px solid var(--hairline); " +
-  "border-radius:var(--r-md); padding:10px 12px; font-size:var(--body-sm); line-height:1.5;";
-
 export function mountUpdates(
   el: HTMLElement,
   app: AppState,
@@ -53,14 +40,6 @@ export function mountUpdates(
   let trackedErr: string | null = null;
   let managedFilter: ManagedFilter = "all";
   let mutating: string | null = null; // folder being pinned/ignored/rolled back
-  // --- snapshot export/check (CLI `snapshot export|check` parity) ----------
-  let snapshotOpen = false;
-  let exporting = false;
-  let snapshot: SnapshotResult | null = null;
-  let snapshotInput = "";
-  let checkingSnapshot = false;
-  let snapshotCheck: SnapshotCheck | null = null;
-  let snapshotCheckErr: string | null = null;
 
   const check = async (): Promise<void> => {
     checking = true;
@@ -71,77 +50,6 @@ export function mountUpdates(
       toast({ type: "error", title: "Check failed", message: errText(err) });
     } finally {
       checking = false;
-      rerender();
-    }
-  };
-
-  const exportSnapshot = async (): Promise<void> => {
-    if (exporting) return;
-    exporting = true;
-    rerender();
-    try {
-      snapshot = await service.ExportSnapshot();
-      toast({
-        type: "ok",
-        title: "Snapshot exported",
-        message: `${snapshot.addon_count} addon${snapshot.addon_count === 1 ? "" : "s"} frozen — copy it, or save it as a file for later.`,
-      });
-    } catch (err) {
-      toast({ type: "error", title: "Snapshot export failed", message: errText(err) });
-    } finally {
-      exporting = false;
-      rerender();
-    }
-  };
-
-  const copySnapshot = async (): Promise<void> => {
-    if (!snapshot) return;
-    const text = snapshot.snapshot_json;
-    const okToast: ToastOpts = {
-      type: "ok",
-      title: "Snapshot copied",
-      message: "Paste it into the check box, or save it for later.",
-    };
-    try {
-      await navigator.clipboard.writeText(text);
-      toast(okToast);
-    } catch {
-      // Clipboard API unavailable (non-secure context / older webview) —
-      // fall back to select-and-execCommand on the read-only textarea.
-      const ta = el.querySelector<HTMLTextAreaElement>("[data-snapshot-json]");
-      if (!ta) {
-        toast({ type: "error", title: "Copy failed", message: "Select the JSON and press Ctrl+C." });
-        return;
-      }
-      ta.focus();
-      ta.select();
-      try {
-        if (document.execCommand("copy")) toast(okToast);
-        else toast({ type: "error", title: "Copy failed", message: "Select the JSON and press Ctrl+C." });
-      } catch {
-        toast({ type: "error", title: "Copy failed", message: "Select the JSON and press Ctrl+C." });
-      }
-    }
-  };
-
-  const checkSnapshot = async (): Promise<void> => {
-    if (checkingSnapshot) return;
-    const json = snapshotInput.trim();
-    if (!json) {
-      toast({ type: "warn", title: "Nothing to check", message: "Paste a snapshot JSON first." });
-      return;
-    }
-    checkingSnapshot = true;
-    snapshotCheck = null;
-    snapshotCheckErr = null;
-    rerender();
-    try {
-      snapshotCheck = await service.CheckSnapshot(json);
-    } catch (err) {
-      snapshotCheckErr = errText(err);
-      toast({ type: "error", title: "Snapshot check failed", message: errText(err) });
-    } finally {
-      checkingSnapshot = false;
       rerender();
     }
   };
@@ -159,6 +67,8 @@ export function mountUpdates(
     if (el.closest("[data-apply-all]")) return "apply-all";
     const one = el.closest<HTMLElement>("[data-apply-one]");
     if (one) return `apply-one:${one.dataset.applyOne}`;
+    const menu = el.closest<HTMLElement>("[data-row-menu]");
+    if (menu) return `row-menu:${menu.dataset.rowMenu}`;
     const filter = el.closest<HTMLElement>("[data-managed-filter]");
     if (filter) return `managed-filter:${filter.dataset.managedFilter}`;
     const pin = el.closest<HTMLElement>("[data-managed-pin]");
@@ -167,11 +77,6 @@ export function mountUpdates(
     if (ignore) return `managed-ignore:${ignore.dataset.managedIgnore}`;
     const rollback = el.closest<HTMLElement>("[data-managed-rollback]");
     if (rollback) return `managed-rollback:${rollback.dataset.managedRollback}`;
-    if (el.closest("[data-snapshot-toggle]")) return "snapshot-toggle";
-    if (el.closest("[data-snapshot-export]")) return "snapshot-export";
-    if (el.closest("[data-snapshot-copy]")) return "snapshot-copy";
-    if (el.closest("[data-snapshot-check-input]")) return "snapshot-input";
-    if (el.closest("[data-snapshot-check]")) return "snapshot-check";
     return null;
   };
 
@@ -186,11 +91,7 @@ export function mountUpdates(
     else if (kind === "managed-pin") target = el.querySelector<HTMLElement>(`[data-managed-pin="${id}"]`);
     else if (kind === "managed-ignore") target = el.querySelector<HTMLElement>(`[data-managed-ignore="${id}"]`);
     else if (kind === "managed-rollback") target = el.querySelector<HTMLElement>(`[data-managed-rollback="${id}"]`);
-    else if (kind === "snapshot-toggle") target = el.querySelector<HTMLElement>("[data-snapshot-toggle]");
-    else if (kind === "snapshot-export") target = el.querySelector<HTMLElement>("[data-snapshot-export]");
-    else if (kind === "snapshot-copy") target = el.querySelector<HTMLElement>("[data-snapshot-copy]");
-    else if (kind === "snapshot-input") target = el.querySelector<HTMLElement>("[data-snapshot-check-input]");
-    else if (kind === "snapshot-check") target = el.querySelector<HTMLElement>("[data-snapshot-check]");
+    else if (kind === "row-menu") target = el.querySelector<HTMLElement>(`button[data-row-menu="${id}"]`);
     if (!target) return false;
     if (target.hasAttribute("disabled")) return false;
     target.focus();
@@ -205,7 +106,7 @@ export function mountUpdates(
     render();
     if (!key) return;
     if (restoreFocus(key)) pendingFocus = null;
-    else if (!checking && applying === null && mutating === null && !exporting && !checkingSnapshot) pendingFocus = null;
+    else if (!checking && applying === null && mutating === null) pendingFocus = null;
   };
 
   const loadTracked = async (): Promise<void> => {
@@ -316,7 +217,7 @@ export function mountUpdates(
     if (u.flavor_mismatch) {
       const confirmed = await confirmDialog({
         title: `Update “${u.title}” anyway?`,
-        message: `This addon is for a different game version — applying it may not work on your current profile.`,
+        message: `This addon is for a different game version. Applying it may not work on your current profile.`,
         details: [u.flavor_label],
         confirmLabel: "Update Anyway",
       });
@@ -343,10 +244,10 @@ export function mountUpdates(
     if (mismatched > 0) {
       const confirmed = await confirmDialog({
         title: `Update all ${result.updates.length} addons?`,
-        message: `${mismatched} update${mismatched === 1 ? " is" : "s are"} for a different game version — apply anyway?`,
+        message: `${mismatched} update${mismatched === 1 ? " is" : "s are"} for a different game version. Apply anyway?`,
         details: result.updates
           .filter((u) => u.flavor_mismatch)
-          .map((u) => `${u.title} — ${u.flavor_label}`),
+          .map((u) => `${u.title}: ${u.flavor_label}`),
         confirmLabel: "Update All Anyway",
       });
       if (!confirmed) return;
@@ -394,25 +295,25 @@ export function mountUpdates(
       <div class="updates">
         <div class="updates-toolbar">
           <div class="updates-toolbar-left">
-            <button class="btn btn-outline" data-check ${busy ? "disabled" : ""}>
-              ${checking ? `<span class="spinner"></span>` : icon("refresh", 15)}
-              <span>${checking ? "Checking…" : "Check for updates"}</span>
-            </button>
-            ${
-              result
-                ? `<div class="updates-summary" aria-label="Update summary">
-                    <span class="count-item"><span class="status-dot ok"></span><span class="count-num">${updates.length}</span> update${updates.length === 1 ? "" : "s"} available</span>
-                    <span class="count-item"><span class="status-dot warn"></span><span class="count-num">${mismatched}</span> skipped</span>
-                    <span class="count-item ${errors.length ? "" : "muted"}"><span class="status-dot ${errors.length ? "error" : "muted"}"></span><span class="count-num">${errors.length}</span> error${errors.length === 1 ? "" : "s"}</span>
-                    ${checkedAt ? `<span class="count-item muted">checked ${checkedAt}</span>` : ""}
-                  </div>`
-                : ""
-            }
-          </div>
           <button class="btn btn-primary" data-apply-all ${busy || updates.length === 0 ? "disabled" : ""}>
             ${applying === "all" ? `<span class="spinner"></span>` : icon("download", 15)}
             <span>${applying === "all" ? "Updating…" : `Update all (${updates.length})`}</span>
           </button>
+          <button class="btn btn-outline" data-check ${busy ? "disabled" : ""}>
+            ${checking ? `<span class="spinner"></span>` : icon("refresh", 15)}
+            <span>${checking ? "Checking…" : "Check for updates"}</span>
+          </button>
+          ${
+            result
+              ? `<div class="updates-summary" aria-label="Update summary">
+                  <span class="count-item"><span class="status-dot ok"></span><span class="count-num">${updates.length}</span> update${updates.length === 1 ? "" : "s"} available</span>
+                  <span class="count-item"><span class="status-dot warn"></span><span class="count-num">${mismatched}</span> skipped</span>
+                  <span class="count-item ${errors.length ? "" : "muted"}"><span class="status-dot ${errors.length ? "error" : "muted"}"></span><span class="count-num">${errors.length}</span> error${errors.length === 1 ? "" : "s"}</span>
+                  ${checkedAt ? `<span class="count-item muted">checked ${checkedAt}</span>` : ""}
+                </div>`
+              : ""
+          }
+          </div>
         </div>
 
         ${
@@ -440,8 +341,6 @@ export function mountUpdates(
               : `<div class="update-rows">${updates.map(renderRow).join("")}</div>`
         }
 
-        ${snapshotSectionHtml()}
-
         ${managedSectionHtml(managedAll, managedVisible, managedPinned, managedIgnored)}
       </div>`;
 
@@ -459,6 +358,16 @@ export function mountUpdates(
       btn.addEventListener("click", () => {
         pendingFocus = `apply-one:${btn.dataset.applyOne}`;
         void applyOne(u);
+      });
+    });
+    el.querySelectorAll<HTMLElement>("[data-row-menu]").forEach((trigger) => {
+      const i = Number(trigger.dataset.rowMenu);
+      const u = updates[i];
+      if (!u) return;
+      attachRowMenu(trigger, {
+        label: `More actions for ${u.title}`,
+        menuLabel: `Actions for ${u.title}`,
+        items: () => rowMenuItems(u, i),
       });
     });
     el.querySelectorAll<HTMLElement>("[data-managed-filter]").forEach((chip) => {
@@ -488,36 +397,17 @@ export function mountUpdates(
         void rollback(t);
       });
     });
-    el.querySelector("[data-snapshot-toggle]")?.addEventListener("click", () => {
-      pendingFocus = "snapshot-toggle";
-      snapshotOpen = !snapshotOpen;
-      rerender();
-    });
-    el.querySelector("[data-snapshot-export]")?.addEventListener("click", () => {
-      pendingFocus = "snapshot-export";
-      void exportSnapshot();
-    });
-    el.querySelector("[data-snapshot-copy]")?.addEventListener("click", () => {
-      pendingFocus = "snapshot-copy";
-      void copySnapshot();
-    });
-    el.querySelector<HTMLTextAreaElement>("[data-snapshot-check-input]")?.addEventListener("input", (e) => {
-      snapshotInput = (e.target as HTMLTextAreaElement).value;
-    });
-    el.querySelector("[data-snapshot-check]")?.addEventListener("click", () => {
-      pendingFocus = "snapshot-check";
-      void checkSnapshot();
-    });
   };
 
   const renderRow = (u: UpdateEntry, i: number): string => {
     const failed = failures.get(u.folder);
     const mismatch = u.flavor_mismatch
-      ? `<span class="mismatch-badge" title="Different game version — confirm before applying">${icon("alert", 12)}<span>${escapeHtml(u.flavor_label)}</span></span>`
+      ? `<span class="mismatch-badge" title="Different game version - confirm before applying">${icon("alert", 12)}<span>${escapeHtml(u.flavor_label)}</span></span>`
       : "";
     const error = failed
       ? `<div class="row-error" role="alert">${icon("x-circle", 14)}<span>${escapeHtml(failed)}</span></div>`
       : "";
+    const rowBusy = applying === u.folder || mutating === u.folder;
     return `
       <div class="update-row${failed ? " has-error" : ""}${u.flavor_mismatch ? " has-mismatch" : ""}">
         <div class="update-info">
@@ -529,9 +419,9 @@ export function mountUpdates(
           ${error}
         </div>
         <div class="update-versions mono" aria-label="Version change">
-          <span class="update-ver-cur">${escapeHtml(u.current_version || "—")}</span>
+          <span class="update-ver-cur">${escapeHtml(u.current_version || "n/a")}</span>
           <span class="update-arrow">${icon("chevron-right", 13)}</span>
-          <span class="update-ver-latest">${escapeHtml(u.latest_version || "—")}</span>
+          <span class="update-ver-latest">${escapeHtml(u.latest_version || "n/a")}</span>
         </div>
         <div class="update-provider">${providerChip(u.provider)}</div>
         <div class="update-action">
@@ -539,15 +429,83 @@ export function mountUpdates(
             ${applying === u.folder ? `<span class="spinner"></span>` : icon("download", 14)}
             <span>${applying === u.folder ? "Updating…" : "Update"}</span>
           </button>
+          <button class="row-menu-trigger" data-row-menu="${i}"
+            aria-label="More actions for ${escapeAttr(u.title)}" aria-haspopup="menu" aria-expanded="false"
+            ${rowBusy ? "disabled" : ""}>
+            <span aria-hidden="true">⋯</span>
+          </button>
         </div>
       </div>`;
   };
 
+  // The overflow menu operates on the tracked addon (pin/ignore/rollback);
+  // fall back to the update entry's own data when tracking hasn't loaded.
+  const rowMenuTarget = (u: UpdateEntry): TrackedAddon => {
+    const t = tracked?.find((x) => x.folder === u.folder);
+    return {
+      folder: u.folder,
+      title: u.title,
+      version: u.current_version ?? "",
+      provider: u.provider,
+      id: u.id,
+      source: u.source,
+      pinned: t?.pinned ?? false,
+      ignored: t?.ignored ?? false,
+      installed_at: t?.installed_at ?? "",
+      has_history: t?.has_history ?? false,
+    };
+  };
+
+  const rowMenuItems = (u: UpdateEntry, i: number): MenuItem[] => {
+    const t = rowMenuTarget(u);
+    return [
+      {
+        label: t.has_history ? "History…" : "No version history",
+        icon: "list",
+        disabled: !t.has_history,
+        onSelect: () => {
+          pendingFocus = `row-menu:${i}`;
+          openVersionHistory({
+            folder: t.folder,
+            title: t.title,
+            restoreFocus: el.querySelector<HTMLElement>(`button[data-row-menu="${i}"]`),
+            onRolledBack: () => void reloadAll(),
+          });
+        },
+      },
+      {
+        label: t.pinned ? "Unpin" : "Pin",
+        icon: "lock",
+        onSelect: () => {
+          pendingFocus = `row-menu:${i}`;
+          void setPinned(t, !t.pinned);
+        },
+      },
+      {
+        label: t.ignored ? "Track again" : "Ignore",
+        icon: t.ignored ? "eye" : "eye-off",
+        onSelect: () => {
+          pendingFocus = `row-menu:${i}`;
+          void setIgnored(t, !t.ignored);
+        },
+      },
+      {
+        label: "Rollback",
+        icon: "download",
+        warn: true,
+        onSelect: () => {
+          pendingFocus = `row-menu:${i}`;
+          void rollback(t);
+        },
+      },
+    ];
+  };
+
   const renderManagedRow = (t: TrackedAddon, i: number): string => {
     const state = t.pinned
-      ? `<span class="tag tag-pinned" title="Pinned — locked at the current version">${icon("lock", 11)}<span>Pinned</span></span>`
+      ? `<span class="tag tag-pinned" title="Pinned - locked at the current version">${icon("lock", 11)}<span>Pinned</span></span>`
       : t.ignored
-        ? `<span class="tag tag-ignored" title="Ignored — excluded from update management">Ignored</span>`
+        ? `<span class="tag tag-ignored" title="Ignored - excluded from update management">Ignored</span>`
         : "";
     const busy = mutating === t.folder;
     return `
@@ -559,7 +517,7 @@ export function mountUpdates(
           </div>
           <span class="managed-folder mono">${escapeHtml(t.folder)}</span>
         </div>
-        <div class="managed-version mono">${escapeHtml(t.version || "—")}</div>
+        <div class="managed-version mono">${escapeHtml(t.version || "n/a")}</div>
         <div class="managed-provider">${providerChip(t.provider)}</div>
         <div class="managed-actions">
           <button class="btn btn-outline btn-sm" data-managed-pin="${i}" ${busy ? "disabled" : ""}
@@ -606,7 +564,7 @@ export function mountUpdates(
     } else if (all.length === 0) {
       body = `<div class="managed-empty">
         <span class="managed-empty-icon">${icon("list", 18)}</span>
-        <span>No tracked addons yet — install from the catalog to track addons here.</span>
+        <span>No tracked addons yet. Install from the catalog to track addons here.</span>
       </div>`;
     } else {
       body = `<div class="managed-rows">${visible.map((t, i) => renderManagedRow(t, i)).join("")}</div>`;
@@ -620,122 +578,6 @@ export function mountUpdates(
         </div>
         <div class="managed-chips" role="group" aria-label="Filter managed addons">${chips}</div>
         ${body}
-      </section>`;
-  };
-
-  // Read-only variant of the update row: same layout, no apply button —
-  // the snapshot check is a pure offline diff, applying stays a live
-  // CheckUpdates/ApplyUpdate flow.
-  const renderSnapshotRow = (u: UpdateEntry): string => `
-    <div class="update-row${u.flavor_mismatch ? " has-mismatch" : ""}">
-      <div class="update-info">
-        <div class="update-name-line">
-          <span class="update-name">${escapeHtml(u.title)}</span>
-          <span class="update-folder mono">${escapeHtml(u.folder)}</span>
-        </div>
-        ${
-          u.flavor_mismatch
-            ? `<span class="mismatch-badge" title="Different game version — confirm before applying">${icon("alert", 12)}<span>${escapeHtml(u.flavor_label)}</span></span>`
-            : ""
-        }
-      </div>
-      <div class="update-versions mono" aria-label="Version change">
-        <span class="update-ver-cur">${escapeHtml(u.current_version || "—")}</span>
-        <span class="update-arrow">${icon("chevron-right", 13)}</span>
-        <span class="update-ver-latest">${escapeHtml(u.latest_version || "—")}</span>
-      </div>
-      <div class="update-provider">${providerChip(u.provider)}</div>
-      <div class="update-action"></div>
-    </div>`;
-
-  const checkResultHtml = (): string => {
-    if (checkingSnapshot) {
-      return `<div class="list-loading"><span class="spinner"></span><span>Checking snapshot…</span></div>`;
-    }
-    if (snapshotCheckErr) {
-      return `<div class="managed-error" role="alert">${icon("alert", 14)}<span>${escapeHtml(snapshotCheckErr)}</span></div>`;
-    }
-    if (!snapshotCheck) return "";
-    const ups = snapshotCheck.updates ?? [];
-    const errs = snapshotCheck.errors ?? [];
-    return `
-      <div class="updates-summary" aria-label="Snapshot check summary">
-        <span class="count-item"><span class="status-dot ok"></span><span class="count-num">${ups.length}</span> update${ups.length === 1 ? "" : "s"} available</span>
-        <span class="count-item ${errs.length ? "" : "muted"}"><span class="status-dot ${errs.length ? "warn" : "muted"}"></span><span class="count-num">${errs.length}</span> warning${errs.length === 1 ? "" : "s"}</span>
-      </div>
-      ${
-        errs.length
-          ? `<div class="snapshot-errors">${errs
-              .map((e) => `<div class="managed-error" role="alert">${icon("alert", 14)}<span>${escapeHtml(e)}</span></div>`)
-              .join("")}</div>`
-          : ""
-      }
-      ${
-        ups.length === 0
-          ? `<p class="result-hint">Nothing to update — the registry already matches this snapshot.</p>`
-          : `<div class="update-rows">${ups.map(renderSnapshotRow).join("")}</div>`
-      }`;
-  };
-
-  const snapshotSectionHtml = (): string => {
-    const exportSummary = snapshot
-      ? `<p class="result-hint">${snapshot.addon_count} addon${snapshot.addon_count === 1 ? "" : "s"} · exported ${formatDateTime(snapshot.exported_at)}</p>`
-      : "";
-    const exportWarnings =
-      snapshot && snapshot.warnings.length > 0
-        ? `<ul class="snapshot-warnings" style="margin:0; padding-left:18px; display:flex; flex-direction:column; gap:2px; font-size:var(--caption); color:var(--warn)">
-            ${snapshot.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}
-          </ul>`
-        : "";
-    return `
-      <section class="snapshot" aria-label="Snapshot — offline update check">
-        <button class="btn btn-ghost btn-sm snapshot-toggle" data-snapshot-toggle aria-expanded="${snapshotOpen}" aria-controls="snapshot-body">
-          ${icon(snapshotOpen ? "chevron-down" : "chevron-right", 14)}
-          <span>Snapshot</span>
-          <span class="muted">offline update check</span>
-        </button>
-        ${
-          snapshotOpen
-            ? `<div class="snapshot-body" id="snapshot-body">
-                <div class="field-row snapshot-cols">
-                  <div class="field snapshot-col">
-                    <h3 class="detail-title">Export</h3>
-                    <p class="result-hint">Freeze the tracked addons and their latest known versions into portable JSON for an offline check.</p>
-                    <div class="snapshot-actions">
-                      <button class="btn btn-outline btn-sm" data-snapshot-export ${exporting ? "disabled" : ""}>
-                        ${exporting ? `<span class="spinner"></span>` : icon("download", 14)}
-                        <span>${exporting ? "Exporting…" : "Export snapshot"}</span>
-                      </button>
-                      ${
-                        snapshot
-                          ? `<button class="btn btn-primary btn-sm" data-snapshot-copy>${icon("file", 14)}<span>Copy</span></button>`
-                          : ""
-                      }
-                    </div>
-                    ${exportSummary}
-                    ${
-                      snapshot
-                        ? `<textarea class="mono" data-snapshot-json readonly rows="10" spellcheck="false" aria-label="Exported snapshot JSON" style="${JSON_TEXTAREA_STYLE}">${escapeHtml(snapshot.snapshot_json)}</textarea>`
-                        : ""
-                    }
-                    ${exportWarnings}
-                  </div>
-                  <div class="field snapshot-col">
-                    <h3 class="detail-title">Check</h3>
-                    <p class="result-hint">Paste a snapshot and diff it against the current registry — no network access.</p>
-                    <textarea class="mono" data-snapshot-check-input rows="7" spellcheck="false" aria-label="Snapshot JSON to check" placeholder="Paste snapshot JSON here…" style="${JSON_TEXTAREA_STYLE}">${escapeHtml(snapshotInput)}</textarea>
-                    <div class="snapshot-actions">
-                      <button class="btn btn-primary btn-sm" data-snapshot-check ${checkingSnapshot ? "disabled" : ""}>
-                        ${checkingSnapshot ? `<span class="spinner"></span>` : icon("search", 14)}
-                        <span>${checkingSnapshot ? "Checking…" : "Check"}</span>
-                      </button>
-                    </div>
-                    ${checkResultHtml()}
-                  </div>
-                </div>
-              </div>`
-            : ""
-        }
       </section>`;
   };
 
@@ -760,16 +602,6 @@ function formatCheckedAt(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-function formatDateTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return (
-    d.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" }) +
-    " " +
-    d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-  );
 }
 
 function emptyCard(glyph: IconName, title: string, sub: string, cta: string): string {

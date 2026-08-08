@@ -10,30 +10,19 @@ Verification basis: `wails dev` running against the live backend (`http://localh
 |---|---|---|
 | `wowfix` (bare) | — (GUI is the primary interface) | `n/a` |
 | `wowfix help` | — (GUI is the primary interface) | `n/a` |
-| `wowfix scan` | `Service.Scan` + Scan view | `verified` |
-| `wowfix fix` | `Service.Fix` / `Service.FixAll` + Scan view "Fix All" | `covered` |
-| `wowfix install <addon.zip>` | `Service.InstallZip` + Install view | `covered` |
-| `wowfix install <url\|owner/repo>` | `Service.InstallSource` + Catalog / Install views | `covered` |
-| `wowfix validate` | `Service.Validate` + Validate view | `covered` |
-| `wowfix list` | `Service.Scan` addons + Scan view rows | `verified` |
+| `wowfix scan` | `Service.Scan` + Overview (Scan) | `verified` |
+| `wowfix fix` | `Service.Fix` / `Service.FixAll` + Overview (Scan) "Fix All" | `covered` |
+| `wowfix install <addon.zip>` | `Service.InstallZip` + Catalog (install surface: URL/owner-repo bar, Browse… for ZIPs, drag-drop) | `covered` |
+| `wowfix install <url\|owner/repo>` | `Service.InstallSource` + Catalog (install surface: URL/owner-repo bar, Browse… for ZIPs, drag-drop) | `covered` |
+| `wowfix validate` | `Service.Validate` + Overview (Validation) | `covered` |
+| `wowfix list` | `Service.Scan` addons + Overview (Scan) rows | `verified` |
 | `wowfix search <query>` | `Service.SearchCatalog` + Catalog view | `verified` |
 | `wowfix info <addon>` | `Service.AddonInfo` + Catalog view info panel | `verified` |
-| `wowfix update` | `Service.CheckUpdates` / `Service.ApplyUpdate` / `Service.ApplyAllUpdates` + Updates view (exit-code semantics n/a in GUI) | `verified` |
-| `wowfix update --check` | `Service.CheckUpdates` + Updates view (exit-code semantics n/a in GUI) | `verified` |
-| `wowfix snapshot export\|check <file>` | `Service.ExportSnapshot` / `Service.CheckSnapshot` + Updates view snapshot section | `verified` |
-| `wowfix sources` | `Service.Sources` + Catalog view sources section | `verified` |
-| `wowfix curated list` | `Service.Curated` + Catalog view curated section | `covered` |
-| `wowfix curated install <name>` | `Service.InstallSource` (curated source) + Catalog view curated install buttons | `verified` |
-| `wowfix backup` | `Service.BackupNow` + Backups view | `verified` |
-| `wowfix restore [id]` | `Service.ListBackups` / `Service.RestoreBackup` + Backups view | `verified` |
-| `wowfix doctor` | `Service.Doctor` + Doctor view | `verified` |
-| `wowfix config` | `Service.Config` + Settings view | `verified` |
-| `wowfix config set <key> <val>` | `Service.SetConfigKey` + Settings view | `verified` |
-| `wowfix profile` | `Service.Collections` / `Service.CreateCollection` / `Service.SwitchCollection` / … + Collections view | `covered` |
-| `wowfix savedvars` | `Service.SavedVars*` + SavedVars view | `verified` |
-| `wowfix export <out.json\|out.zip>` | `Service.ExportCollection` + Export/Import view | `verified` |
-| `wowfix import <file\|url>` | `Service.ImportCollection` + Export/Import view | `verified` |
-| `wowfix version` | `Service.GetState` version + shell brand chip | `verified` |
+| `wowfix update` | `Service.CheckUpdates` / `Service.ApplyUpdate` / `Service.ApplyAllUpdates` + Updates (primary "Update all"; per-row Update + ⋯ Pin/Ignore/History…/Rollback; Managed section with explicit Pin/Ignore/Rollback) | `verified` |
+| `wowfix update --check` | `Service.CheckUpdates` + Updates (exit-code semantics n/a in GUI) | `verified` |
+| `wowfix history <folder> [--json]` | `Service.ListAddonVersions` + Updates row ⋯ menu "History…" (per-addon version log, newest first, Current marker, per-row Rollback) | `covered` |
+| `wowfix rollback <folder> <version>` | `Service.RollbackToVersion` + Updates History modal rollback (re-downloads exact version from provider; backup-first confirmation; providers without versioned downloads show honest error) | `covered` |
+| `wowfix snapshot export|check <file>` | `Service.ExportSnapshot` / `Service.CheckSnapshot` + Backups (Snapshot section) | `verified` |
 
 ## Evidence
 
@@ -53,7 +42,7 @@ Session: 2026-08-07, `wails dev`, real backend bindings (`window.go.service.Serv
 - **export** — Exported the live addon list to a scratch path: manifest written and parsed (`name wowfix-export, version 1, game vanilla, 37 addons`); UI toast "Exported 37 addons". Parent-dir-missing error surfaced inline correctly.
 - **import** — Import section renders (path/URL input, Import button behind confirm dialog); dispatch zip/manifest/URL covered by unit tests (`TestServiceImportCollectionManifest/Zip/URL/Unsupported`).
 - **version** — Shell brand chip shows `vdev` from `GetState` (build version passed by `gui.App`).
-- **All rows** — 12 tabs render in the shell (Scan, Doctor, Validation, Updates, Catalog, Install, Collections, Export/Import, Saved Variables, Backups, Installs, Settings); `go build ./...`, `go vet ./...`, `go test ./...` all pass; `cmd/wowfix` untouched (empty `git diff -- cmd/`).
+- **All rows** — 6 destinations render in the shell (Overview, Updates, Catalog, Collections, Backups, Settings; SavedVariables reachable via `?view=savedvars`, Export/Import reachable via `?view=exportimport`); `go build ./...`, `go vet ./...`, `go test ./...` all pass; `cmd/wowfix` untouched (empty `git diff -- cmd/`).
 
 ## Notes
 

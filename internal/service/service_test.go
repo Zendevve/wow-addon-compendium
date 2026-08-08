@@ -6,6 +6,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -323,12 +324,14 @@ func (t *rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 }
 
 // mockGitHub serves the GitHub endpoints the real provider hits:
-// repository metadata, latest releases and release zip assets.
+// repository metadata, latest releases, release zip assets and
+// per-tag release lookups (rollback).
 type mockGitHub struct {
 	repos   map[string]string // "owner/repo" -> latest release tag
 	zips    map[string][]byte // "owner/repo" -> archive bytes for Download
 	results []string          // "owner/repo" names returned by search
 	notes   map[string]string // "owner/repo" -> latest release notes body
+	tags    map[string]bool   // "owner/repo/tag" -> resolvable past release
 }
 
 // client returns an http.Client whose GitHub traffic reaches only the
@@ -368,6 +371,16 @@ func (m *mockGitHub) client(t *testing.T) *http.Client {
 			w.Write(data)
 		case strings.HasPrefix(r.URL.Path, "/repos/"):
 			rest := strings.TrimPrefix(r.URL.Path, "/repos/")
+			if id, tag, ok := strings.Cut(rest, "/releases/tags/"); ok {
+				if !m.tags[id+"/"+tag] {
+					http.NotFound(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":"addon.zip","browser_download_url":"https://github.com/dl/%s"}]}`,
+					tag, url.PathEscape(id))
+				return
+			}
 			if id, ok := strings.CutSuffix(rest, "/releases/latest"); ok {
 				tag, ok := m.repos[id]
 				if !ok {
@@ -1389,6 +1402,230 @@ func TestRollbackAddonNoSnapshot(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no backup snapshot contains") {
 		t.Errorf("error = %q, want no-snapshot message", err.Error())
+	}
+}
+
+// TestListAddonVersions returns the recorded log newest-first with the
+// current version, mapping refs and RFC3339 timestamps.
+func TestListAddonVersions(t *testing.T) {
+	s, _, regPath, _ := newTestCatalogService(t)
+	reg, err := catalog.NewRegistry(regPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reg.Track(catalog.Entry{Folder: "Questie", Title: "Questie", Version: "9.0.0", Provider: "github", ID: "acme/questie", Source: "acme/questie", VersionRef: "v9.0.0"})
+	_ = reg.Track(catalog.Entry{Folder: "Questie", Title: "Questie", Version: "9.2.0", Provider: "github", ID: "acme/questie", Source: "acme/questie", VersionRef: "v9.2.0"})
+
+	res, err := s.ListAddonVersions("questie") // case-insensitive
+	if err != nil {
+		t.Fatalf("ListAddonVersions: %v", err)
+	}
+	if res.Folder != "Questie" || res.Current != "9.2.0" {
+		t.Errorf("result = folder %q current %q, want Questie / 9.2.0", res.Folder, res.Current)
+	}
+	if len(res.Versions) != 2 {
+		t.Fatalf("versions = %d, want 2: %+v", len(res.Versions), res.Versions)
+	}
+	if res.Versions[0].Version != "9.2.0" || res.Versions[1].Version != "9.0.0" {
+		t.Errorf("versions order = [%s, %s], want [9.2.0, 9.0.0]", res.Versions[0].Version, res.Versions[1].Version)
+	}
+	if res.Versions[0].Ref != "v9.2.0" || res.Versions[0].Provider != "github" || res.Versions[0].Source != "acme/questie" {
+		t.Errorf("version entry = %+v", res.Versions[0])
+	}
+	if _, err := time.Parse(time.RFC3339, res.Versions[0].At); err != nil {
+		t.Errorf("at = %q is not RFC3339: %v", res.Versions[0].At, err)
+	}
+}
+
+func TestListAddonVersionsUntracked(t *testing.T) {
+	s, _, _, _ := newTestCatalogService(t)
+	_, err := s.ListAddonVersions("Nope")
+	if err == nil {
+		t.Fatal("ListAddonVersions on an untracked folder should error")
+	}
+	if !strings.Contains(err.Error(), "not tracked in registry") {
+		t.Errorf("error = %q, want not-tracked message", err.Error())
+	}
+}
+
+// TestTrackedAddonsReportsHistory checks the has_history flag drives
+// the History menu state: version changes record history, and
+// old-format entries (no history field) report false.
+func TestTrackedAddonsReportsHistory(t *testing.T) {
+	s, _, regPath, _ := newTestCatalogService(t)
+	reg, err := catalog.NewRegistry(regPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reg.Track(catalog.Entry{Folder: "Questie", Title: "Questie", Version: "9.0.0", Provider: "github", ID: "acme/questie"})
+	_ = reg.Track(catalog.Entry{Folder: "Questie", Title: "Questie", Version: "9.2.0", Provider: "github", ID: "acme/questie"})
+	// A fresh install records its initial version too.
+	_ = reg.Track(catalog.Entry{Folder: "Atlas", Title: "Atlas", Version: "7.0.4", Provider: "github", ID: "acme/atlas"})
+
+	res, err := s.TrackedAddons()
+	if err != nil {
+		t.Fatalf("TrackedAddons: %v", err)
+	}
+	byFolder := map[string]TrackedAddon{}
+	for _, a := range res.Addons {
+		byFolder[a.Folder] = a
+	}
+	if !byFolder["Questie"].HasHistory {
+		t.Error("Questie: HasHistory = false, want true")
+	}
+	if !byFolder["Atlas"].HasHistory {
+		t.Error("Atlas: HasHistory = false, want true (initial install recorded)")
+	}
+
+	// An old-format entry without a history field reports false.
+	if err := os.WriteFile(regPath, []byte(`{
+  "version": 1,
+  "entries": [
+    {"folder": "Legacy", "title": "Legacy", "version": "1.0.0", "provider": "github", "id": "acme/legacy", "installed_at": "2024-01-02T03:04:05Z"}
+  ]
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err = s.TrackedAddons()
+	if err != nil {
+		t.Fatalf("TrackedAddons (old format): %v", err)
+	}
+	for _, a := range res.Addons {
+		if a.Folder == "Legacy" && a.HasHistory {
+			t.Error("Legacy (old format): HasHistory = true, want false")
+		}
+	}
+}
+
+// TestRollbackToVersion re-downloads a specific GitHub tag, replaces
+// the folder, snapshots it first and re-records the registry with a
+// fresh history entry.
+func TestRollbackToVersion(t *testing.T) {
+	s, addonsDir, regPath, mock := newTestCatalogService(t)
+	reg, err := catalog.NewRegistry(regPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mock.repos["acme/questie"] = "v9.2.0"
+	mock.tags = map[string]bool{"acme/questie/v9.0.0": true}
+	mock.zips["acme/questie"] = addonZipBytes(t, "Questie", "## Title: Questie\n## Version: 9.0.0\n## Interface: 30300\n")
+	_ = reg.Track(catalog.Entry{Folder: "Questie", Title: "Questie", Version: "9.0.0", Provider: "github", ID: "acme/questie", Source: "acme/questie", VersionRef: "v9.0.0"})
+	_ = reg.Track(catalog.Entry{Folder: "Questie", Title: "Questie", Version: "9.2.0", Provider: "github", ID: "acme/questie", Source: "acme/questie", VersionRef: "v9.2.0"})
+
+	res, err := s.RollbackToVersion("Questie", "9.0.0")
+	if err != nil {
+		t.Fatalf("RollbackToVersion: %v", err)
+	}
+	if len(res.Installed) != 1 || res.Installed[0] != "Questie" {
+		t.Errorf("result = %+v, want Questie installed", res)
+	}
+	if len(res.Errors) != 0 {
+		t.Errorf("errors = %v, want none", res.Errors)
+	}
+
+	// The folder carries the rolled-back TOC version.
+	toc, err := os.ReadFile(filepath.Join(addonsDir, "Questie", "Questie.toc"))
+	if err != nil {
+		t.Fatalf("read TOC: %v", err)
+	}
+	if !strings.Contains(string(toc), "9.0.0") {
+		t.Errorf("TOC after rollback = %q, want 9.0.0", toc)
+	}
+
+	// The replaced folder was snapshotted first (safety path).
+	root := filepath.Clean(filepath.Join(addonsDir, "..", ".."))
+	entries, err := os.ReadDir(filepath.Join(root, "Backups"))
+	if err != nil {
+		t.Fatalf("backups dir: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Error("no backup snapshot of the replaced folder")
+	}
+
+	// The registry records the rollback with a fresh history entry.
+	reloaded, err := catalog.NewRegistry(regPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := reloaded.Entries()[0]
+	if e.Version != "9.0.0" {
+		t.Errorf("tracked version = %q, want 9.0.0", e.Version)
+	}
+	if e.Provider != "github" || e.ID != "acme/questie" || e.Source != "acme/questie" {
+		t.Errorf("entry provider fields not preserved: %+v", e)
+	}
+	if len(e.History) != 3 || e.History[0].Version != "9.0.0" {
+		t.Fatalf("history after rollback = %+v, want [9.0.0, 9.2.0, 9.0.0]", e.History)
+	}
+	if e.History[0].Ref != "v9.0.0" {
+		t.Errorf("history ref = %q, want v9.0.0", e.History[0].Ref)
+	}
+}
+
+// TestRollbackToVersionNotServed fails honestly when the provider can
+// only serve the latest version.
+func TestRollbackToVersionNotServed(t *testing.T) {
+	root := t.TempDir()
+	addonsDir := filepath.Join(root, "Interface", "AddOns")
+	writeFixture(t, addonsDir)
+
+	store := config.NewStoreAt(filepath.Join(t.TempDir(), "config.json"))
+	cfg := config.Default()
+	cfg.WoWPath = root
+	cfg.Flavor = ""
+	if err := store.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	s := New(store)
+	s.registryPath = filepath.Join(t.TempDir(), "registry.json")
+	s.enabledProviders = map[string]bool{catalog.ProviderWowInterface: true}
+	reg, err := catalog.NewRegistry(s.registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reg.Track(catalog.Entry{Folder: "Questie", Title: "Questie", Version: "9.2.0", Provider: "wowinterface", ID: "12345", Source: "https://www.wowinterface.com/downloads/info12345-Questie.html"})
+	_ = reg.Track(catalog.Entry{Folder: "Questie", Title: "Questie", Version: "9.0.0", Provider: "wowinterface", ID: "12345", Source: "https://www.wowinterface.com/downloads/info12345-Questie.html"})
+
+	_, err = s.RollbackToVersion("Questie", "9.0.0")
+	if err == nil {
+		t.Fatal("RollbackToVersion on WowInterface should error")
+	}
+	if !errors.Is(err, catalog.ErrVersionNotServed) {
+		t.Errorf("error should wrap catalog.ErrVersionNotServed, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "wowinterface") || !strings.Contains(err.Error(), "only the latest is available") {
+		t.Errorf("error = %q, want the honest not-served message", err.Error())
+	}
+}
+
+// TestRollbackToVersionUnknownVersion errors when the requested
+// version was never recorded for the addon.
+func TestRollbackToVersionUnknownVersion(t *testing.T) {
+	s, _, regPath, _ := newTestCatalogService(t)
+	reg, err := catalog.NewRegistry(regPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reg.Track(catalog.Entry{Folder: "Questie", Title: "Questie", Version: "9.2.0", Provider: "github", ID: "acme/questie", Source: "acme/questie"})
+
+	_, err = s.RollbackToVersion("Questie", "1.0.0")
+	if err == nil {
+		t.Fatal("RollbackToVersion with an unrecorded version should error")
+	}
+	if !strings.Contains(err.Error(), `no recorded version "1.0.0"`) {
+		t.Errorf("error = %q, want no-recorded-version message", err.Error())
+	}
+}
+
+// TestRollbackToVersionUntracked errors for an unknown folder.
+func TestRollbackToVersionUntracked(t *testing.T) {
+	s, _, _, _ := newTestCatalogService(t)
+	_, err := s.RollbackToVersion("Nope", "1.0.0")
+	if err == nil {
+		t.Fatal("RollbackToVersion on an untracked folder should error")
+	}
+	if !strings.Contains(err.Error(), "not tracked in registry") {
+		t.Errorf("error = %q, want not-tracked message", err.Error())
 	}
 }
 

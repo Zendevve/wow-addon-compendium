@@ -11,6 +11,23 @@ import (
 	"time"
 )
 
+// maxVersionHistory bounds the per-addon version log kept in the
+// registry. Older entries are dropped when the bound is exceeded.
+const maxVersionHistory = 10
+
+// VersionHistory records one version an addon was tracked at. Entries
+// are ordered newest first and bounded by maxVersionHistory.
+type VersionHistory struct {
+	Version  string `json:"version"`
+	Provider string `json:"provider,omitempty"`
+	Source   string `json:"source,omitempty"`
+	// Ref is the provider-scoped reference of Version: a GitHub tag
+	// name or a CurseForge file id. Empty when the provider could not
+	// address the version individually (legacy CurseForge entries).
+	Ref string    `json:"ref,omitempty"`
+	At  time.Time `json:"at"`
+}
+
 // Entry records one installed addon in the registry.
 type Entry struct {
 	Folder      string    `json:"folder"`
@@ -31,6 +48,16 @@ type Entry struct {
 	// these flags existed load with both false.
 	Pinned  bool `json:"pinned,omitempty"`
 	Ignored bool `json:"ignored,omitempty"`
+	// History is the bounded version log of this addon, newest first.
+	// Track appends an entry whenever the tracked version changes, so
+	// installs, updates and rollbacks all land here. Registries
+	// written before history existed load with nil.
+	History []VersionHistory `json:"history,omitempty"`
+	// VersionRef is the provider-scoped reference of Version (GitHub
+	// tag, CurseForge file id). It is transient: Track consumes it
+	// into the next History entry and it is never persisted on the
+	// entry itself.
+	VersionRef string `json:"-"`
 }
 
 // Registry persists the set of addons installed through the catalog
@@ -87,7 +114,12 @@ func (r *Registry) findEntryIndex(folder string) int {
 	return -1
 }
 
-// Track upserts an entry by folder (case-insensitive) and saves.
+// Track upserts an entry by folder (case-insensitive) and saves. When
+// the tracked version differs from the previous entry's, a VersionHistory
+// record for the new version is prepended (bounded by maxVersionHistory);
+// VersionRef, when set, is consumed into that record. History is carried
+// forward from the previous entry because Track callers build fresh
+// entries.
 func (r *Registry) Track(e Entry) error {
 	if strings.TrimSpace(e.Folder) == "" {
 		return fmt.Errorf("registry: cannot track an entry without a folder")
@@ -98,11 +130,43 @@ func (r *Registry) Track(e Entry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if i := r.findEntryIndex(e.Folder); i >= 0 {
+		e.History = r.recordHistory(r.entries[i], e)
+		e.VersionRef = "" // consumed into the history record; transient
 		r.entries[i] = e
 		return r.saveLocked()
 	}
+	e.History = r.recordHistory(Entry{}, e)
+	e.VersionRef = "" // consumed into the history record; transient
 	r.entries = append(r.entries, e)
 	return r.saveLocked()
+}
+
+// recordHistory prepends a VersionHistory record when the tracked
+// version changes, keeping the log newest-first and bounded. The same
+// version tracked twice in a row records once. The caller holds mu.
+func (r *Registry) recordHistory(prev, next Entry) []VersionHistory {
+	hist := prev.History
+	if hist == nil {
+		hist = []VersionHistory{}
+	}
+	version := strings.TrimSpace(next.Version)
+	if version == "" || prev.Version == version {
+		return hist
+	}
+	if len(hist) > 0 && hist[0].Version == version {
+		return hist // re-tracked immediately, no new event
+	}
+	hist = append([]VersionHistory{{
+		Version:  version,
+		Provider: next.Provider,
+		Source:   next.Source,
+		Ref:      next.VersionRef,
+		At:       time.Now(),
+	}}, hist...)
+	if len(hist) > maxVersionHistory {
+		hist = hist[:maxVersionHistory]
+	}
+	return hist
 }
 
 // Entries returns a copy of the tracked entries, sorted by folder.
