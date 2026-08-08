@@ -1,19 +1,27 @@
-// Type definitions mirroring the frozen Wails binding contract.
-// All shapes come from the Go `Service` struct; field names are the JSON
-// names the backend emits (see the binding contract in the project brief).
+// Type definitions mirroring the frozen Wails binding contract
+// (frontend/wailsjs/go/service/Service.d.ts + models.ts — regenerate via
+// `wails generate module`; do not hand-edit the bindings).
+// Field names are the JSON names the backend emits. Naming follows v2 where
+// a type existed there; shapes come from the current generated models.
 
 export type AddonStatus = "ok" | "warn" | "error";
 export type Severity = "info" | "warn" | "error";
+export type CompatStatus = "compatible" | "vanilla" | "retail" | "mismatch" | "unknown";
+export type CheckStatus = "ok" | "warn" | "error" | "info";
+
+/** Addon update / install sources (used for provider chips/badges). */
+export type Provider = "github" | "curseforge" | "wowinterface" | "tukui" | "wago";
+
+// ---------- installs, profiles, app state ----------
 
 export interface Install {
   root: string;
   flavor: string;
-  addons_path?: string;
-  addons_dir?: string;
-  exe?: string;
-  version?: string;
-  profile_id?: string;
-  confidence?: string;
+  addons_path: string;
+  exe: string;
+  version: string;
+  profile_id: string;
+  confidence: string;
 }
 
 export interface Profile {
@@ -35,16 +43,13 @@ export interface State {
   confirmations: boolean;
 }
 
+// ---------- scan / validate / fix ----------
+
 export interface TOC {
-  path?: string;
   name: string;
   title: string;
   interface: number; // -1 when absent
-  raw_interface?: string;
   version: string;
-  author?: string;
-  notes?: string;
-  primary?: boolean;
 }
 
 export interface Issue {
@@ -59,10 +64,11 @@ export interface Issue {
 }
 
 export interface CompatEntry {
+  folder_name: string;
   toc: string;
   expected: number;
   detected: number;
-  status: "compatible" | "vanilla" | "retail" | "mismatch" | "unknown";
+  status: CompatStatus;
   label: string;
 }
 
@@ -75,7 +81,7 @@ export interface Addon {
   size_bytes: number;
   fixable: boolean;
   health: number;
-  toc: TOC | null;
+  toc?: TOC;
   issues: Issue[];
   compat: CompatEntry[];
   /** Installed through the catalog and recorded in the registry. */
@@ -105,14 +111,7 @@ export interface ScanResult {
   stats: ScanStats;
 }
 
-export interface ValidateEntry {
-  folder_name: string;
-  toc: string;
-  expected: number;
-  detected: number;
-  status: CompatEntry["status"];
-  label: string;
-}
+export type ValidateEntry = CompatEntry;
 
 export interface ValidateResult {
   profile_id: string;
@@ -135,14 +134,13 @@ export interface FixResult {
 }
 
 export interface InstallResult {
-  installed: number;
-  replaced: number;
-  skipped: number;
+  installed: string[];
+  replaced: string[];
+  skipped: string[];
   errors: string[];
 }
 
-/** Addon update sources (used for provider chips/badges). */
-export type Provider = "github" | "curseforge" | "wowinterface" | "tukui" | "wago";
+// ---------- updates ----------
 
 export interface UpdateEntry {
   folder: string;
@@ -162,7 +160,21 @@ export interface CheckUpdatesResult {
   checked_at: string;
 }
 
-/** One addon recorded in the catalog registry (the Managed section). */
+export interface ApplyEntry {
+  folder: string;
+  ok: boolean;
+  message: string;
+  error?: string;
+}
+
+export interface ApplyBatch {
+  applied: ApplyEntry[];
+  applied_count: number;
+  failed_count: number;
+}
+
+// ---------- tracked addons (registry) + rollback ----------
+
 export interface TrackedAddon {
   folder: string;
   title: string;
@@ -191,7 +203,6 @@ export interface VersionEntry {
   at: string;
 }
 
-/** The recorded version log of one tracked addon. */
 export interface VersionHistoryResult {
   folder: string;
   current: string;
@@ -206,18 +217,7 @@ export interface RollbackResult {
   message: string;
 }
 
-export interface ApplyEntry {
-  folder: string;
-  ok: boolean;
-  message: string;
-  error: string;
-}
-
-export interface ApplyBatch {
-  applied: ApplyEntry[];
-  applied_count: number;
-  failed_count: number;
-}
+// ---------- catalog ----------
 
 export interface CatalogEntry {
   provider: Provider;
@@ -235,14 +235,6 @@ export interface SearchCatalogResult {
   errors: string[];
 }
 
-export interface InstallSourceResult {
-  installed: string[];
-  replaced: string[];
-  skipped: string[];
-  errors: string[];
-}
-
-/** Outcome of saving a WeakAuras/Plater import string from Wago. */
 export interface WagoImportResult {
   path: string;
   name: string;
@@ -252,14 +244,13 @@ export interface WagoImportResult {
 
 // ---------- curated private-server sets ----------
 
-/** One addon in a curated set (a verified private-server manifest entry). */
 export interface CuratedAddon {
   name: string;
   source: string;
   summary: string;
   homepage: string;
   installed: boolean;
-  installed_version: string;
+  installed_version?: string;
 }
 
 export interface CuratedResult {
@@ -335,8 +326,6 @@ export interface SyncResult {
 
 // ---------- diagnostics (doctor) ----------
 
-export type CheckStatus = "ok" | "warn" | "error" | "info";
-
 export interface DoctorCheck {
   name: string;
   status: CheckStatus;
@@ -347,22 +336,11 @@ export interface DoctorReport {
   checks: DoctorCheck[];
 }
 
-// ---------- addon providers ----------
+// ---------- addon providers + lookup ----------
 
 export interface ProviderInfo {
   name: string;
   description: string;
-}
-
-// ---------- addon lookup (AddonInfo) ----------
-
-/** One candidate when a bare addon name is ambiguous; re-call with its id. */
-export interface InfoMatch {
-  provider: string;
-  id: string;
-  name: string;
-  summary: string;
-  homepage: string;
 }
 
 export interface InfoResult {
@@ -377,7 +355,7 @@ export interface InfoResult {
   updated_at: string;
   release_notes?: string;
   /** Populated when a bare name was ambiguous — the caller picks a match. */
-  matches?: InfoMatch[];
+  matches?: CatalogEntry[];
 }
 
 // ---------- saved variables ----------
@@ -397,13 +375,14 @@ export interface SavedVarsMigrateResult {
   copied: string[];
 }
 
-// ---------- snapshots (backups) ----------
+// ---------- backups ----------
 
 export interface BackupInfo {
   id: string;
   created_at: string;
   reason: string;
-  folders: string[];
+  /** Number of addon folders in the snapshot. */
+  folders: number;
 }
 
 export interface BackupResult {
@@ -460,7 +439,9 @@ export interface SnapshotCheck {
   errors: string[];
 }
 
-/** The Service surface exposed by `window.go.service.Service`. */
+// ---------- the Service surface (facade + mock typing) ----------
+
+/** The full method surface exposed by `window.go.service.Service`. */
 export interface Service {
   GetState(): Promise<State>;
   DetectInstalls(): Promise<Install[]>;
@@ -480,12 +461,12 @@ export interface Service {
   SetAddonIgnored(folder: string, ignored: boolean): Promise<void>;
   RollbackAddon(folder: string): Promise<RollbackResult>;
   ListAddonVersions(folder: string): Promise<VersionHistoryResult>;
-  RollbackToVersion(folder: string, version: string): Promise<InstallSourceResult>;
+  RollbackToVersion(folder: string, version: string): Promise<InstallResult>;
   SearchCatalog(query: string): Promise<SearchCatalogResult>;
   Curated(): Promise<CuratedResult>;
-  InstallSource(source: string, allowReplace: boolean): Promise<InstallSourceResult>;
+  InstallSource(source: string, allowReplace: boolean): Promise<InstallResult>;
   SaveWagoImport(id: string): Promise<WagoImportResult>;
-  RestoreAddon(folder: string, allowReplace: boolean): Promise<InstallSourceResult>;
+  RestoreAddon(folder: string, allowReplace: boolean): Promise<InstallResult>;
   Collections(): Promise<CollectionsResult>;
   CreateCollection(name: string): Promise<CollectionInfo>;
   SwitchCollection(id: string): Promise<SwitchCollectionResult>;
@@ -521,33 +502,6 @@ export interface Service {
   ExportSnapshot(): Promise<SnapshotResult>;
   CheckSnapshot(snapshotJSON: string): Promise<SnapshotCheck>;
 }
-
-export type View =
-  | "setup"
-  | "overview"
-  | "scan"
-  | "doctor"
-  | "validate"
-  | "install"
-  | "updates"
-  | "catalog"
-  | "collections"
-  | "exportimport"
-  | "savedvars"
-  | "backups"
-  | "installs"
-  | "settings";
-
-export const DESTRUCTIVE_ACTIONS = new Set(["delete", "merge"]);
-
-export const ACTION_LABELS: Record<string, string> = {
-  rename: "Rename Folder",
-  flatten: "Flatten Folder",
-  "resolve-toc": "Pick TOC",
-  delete: "Move to Trash",
-  merge: "Merge Duplicates",
-  "repair-structure": "Repair Structure",
-};
 
 export function formatBytes(n: number): string {
   if (n <= 0) return "0 B";

@@ -1,0 +1,662 @@
+/* ==========================================================================
+   Updates view — the update-review surface per DESIGN.md, with the
+   LEARNINGS adoptions: badge-counted update-all, pending-first list with
+   side-by-side old → new versions, per-addon status chips, row-level
+   failure states with an end-of-batch dump, managed pin/ignore/history/
+   restore, and the offline snapshot export/check flow. All classes are
+   scoped under .updates (or .upd-modal-*) to stay inside the slice's
+   file ownership.
+   ========================================================================== */
+
+/* ---- toolbar ---- */
+
+.updates .upd-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+
+.updates .upd-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.updates .upd-meta {
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  line-height: var(--caption-lh);
+  letter-spacing: var(--caption-ls);
+  color: var(--ink-faint);
+}
+
+/* Count badge on the white "Update all" pill: dark chip on the light ground. */
+.updates .upd-count {
+  background: var(--canvas);
+  color: var(--canvas-inverse);
+}
+
+/* ---- spinner / loading ---- */
+
+.updates .upd-spinner,
+.upd-modal-root .upd-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: var(--r-full);
+  animation: upd-spin 700ms linear infinite;
+  flex: none;
+}
+
+.updates .upd-spinner-lg {
+  width: 22px;
+  height: 22px;
+}
+
+@keyframes upd-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.updates .upd-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-6) 0;
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+  font-weight: var(--body-sm-w);
+}
+
+/* ---- check errors (provider outage surfacing) ---- */
+
+.updates .upd-check-errors {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  border-radius: var(--r-lg);
+  background: var(--error-dim);
+  font-size: var(--body-sm);
+}
+
+.updates .upd-check-errors-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--error);
+  font-weight: 500;
+}
+
+.updates .upd-check-errors ul {
+  margin: 0;
+  padding-left: var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  color: var(--ink-muted);
+}
+
+/* ---- sections ---- */
+
+.updates .upd-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.updates .upd-section-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+
+.updates .upd-section-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.updates .upd-section-title {
+  font-size: var(--headline);
+  font-weight: var(--headline-w);
+  line-height: var(--headline-lh);
+  letter-spacing: var(--headline-ls);
+}
+
+.updates .upd-section-meta {
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  line-height: var(--caption-lh);
+  letter-spacing: var(--caption-ls);
+  color: var(--ink-faint);
+}
+
+.updates .upd-tab-count {
+  margin-left: 6px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.updates .upd-section-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-5) 0;
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+}
+
+.updates .upd-section-empty svg {
+  color: var(--ink-faint);
+  flex: none;
+}
+
+/* ---- pending / managed rows (canvas ground, hairline-soft underline) ---- */
+
+.updates .upd-row,
+.updates .upd-managed-row {
+  display: grid;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-3) 0;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+
+.updates .upd-row {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+}
+
+.updates .upd-managed-row {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+}
+
+.updates .upd-row:last-child,
+.updates .upd-managed-row:last-child {
+  border-bottom: none;
+}
+
+.updates .upd-row-info,
+.updates .upd-managed-info {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.updates .upd-row-name-line,
+.updates .upd-managed-name-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.updates .upd-row-name,
+.updates .upd-managed-name {
+  font-size: var(--body-sm);
+  font-weight: var(--body-sm-w);
+  line-height: var(--body-sm-lh);
+  letter-spacing: var(--body-sm-ls);
+  color: var(--ink);
+}
+
+.updates .upd-row-folder,
+.updates .upd-managed-folder {
+  font-size: var(--micro);
+  line-height: var(--micro-lh);
+  color: var(--ink-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.updates .upd-row-chips {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+/* ---- status chips (semantic dims from tokens) ---- */
+
+.updates .upd-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  font-size: var(--micro);
+  line-height: var(--micro-lh);
+  letter-spacing: var(--micro-ls);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.updates .upd-chip-ok {
+  background: var(--ok-dim);
+  color: var(--ok);
+}
+
+.updates .upd-chip-warn {
+  background: var(--warn-dim);
+  color: var(--warn);
+}
+
+.updates .upd-chip-error {
+  background: var(--error-dim);
+  color: var(--error);
+}
+
+.updates .upd-chip-state {
+  background: var(--surface-1);
+  color: var(--ink-muted);
+}
+
+/* ---- versions: side-by-side old → new ---- */
+
+.updates .upd-row-versions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--body-sm);
+  white-space: nowrap;
+}
+
+.updates .upd-ver-cur {
+  color: var(--ink-muted);
+}
+
+.updates .upd-arrow {
+  display: inline-flex;
+  color: var(--ink-faint);
+}
+
+.updates .upd-ver-latest {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+/* ---- provider chip ---- */
+
+.updates .upd-provider-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
+  color: var(--ink-muted);
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  line-height: var(--caption-lh);
+  letter-spacing: var(--caption-ls);
+  white-space: nowrap;
+}
+
+/* ---- row-level failure state ---- */
+
+.updates .upd-row.has-error .upd-row-name {
+  color: var(--error);
+}
+
+.updates .upd-row-error {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--error);
+  font-size: var(--caption);
+  line-height: 1.3;
+  margin-top: var(--sp-1);
+}
+
+/* ---- end-of-batch error dump ---- */
+
+.updates .upd-dump {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  border-radius: var(--r-lg);
+  background: var(--error-dim);
+  font-size: var(--body-sm);
+}
+
+.updates .upd-dump-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--error);
+  font-weight: 500;
+}
+
+.updates .upd-dump ul {
+  margin: 0;
+  padding-left: var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  color: var(--ink-muted);
+}
+
+.updates .upd-dump li {
+  display: flex;
+  gap: var(--sp-3);
+}
+
+.updates .upd-dump li .mono {
+  color: var(--ink);
+  flex: none;
+}
+
+/* ---- managed table extras ---- */
+
+.updates .upd-managed-version {
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+  white-space: nowrap;
+}
+
+.updates .upd-row-action,
+.updates .upd-managed-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.updates .upd-scan-note {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--warn);
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+}
+
+/* ---- compact row pills (40px stays for toolbar CTAs) ---- */
+
+.updates .upd-row-btn {
+  height: 32px;
+  padding: 0 var(--sp-3);
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  line-height: var(--caption-lh);
+  letter-spacing: var(--caption-ls);
+  gap: 6px;
+}
+
+@media (pointer: coarse) {
+  .updates .upd-row-btn {
+    height: 44px;
+  }
+}
+
+/* ---- error boxes ---- */
+
+.updates .upd-error-box {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-lg);
+  background: var(--error-dim);
+  color: var(--error);
+  font-size: var(--body-sm);
+}
+
+/* ---- offline snapshot ---- */
+
+.updates .upd-snapshot-spotlight {
+  margin: 0;
+}
+
+.updates .upd-snapshot-panel {
+  padding: var(--sp-5);
+}
+
+.updates .upd-snapshot-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-6);
+  align-items: start;
+}
+
+.updates .upd-snapshot-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.updates .upd-snapshot-col-title {
+  font-size: var(--sub);
+  font-weight: 500;
+  line-height: var(--sub-lh);
+  letter-spacing: var(--sub-ls);
+}
+
+.updates .upd-snapshot-hint {
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+  letter-spacing: var(--body-sm-ls);
+}
+
+.updates .upd-snapshot-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.updates .upd-snapshot-summary {
+  color: var(--ink-faint);
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+}
+
+.updates .upd-snapshot-json {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 120px;
+  background: var(--canvas);
+  color: var(--ink);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-4);
+  font-size: var(--body-sm);
+  line-height: 1.5;
+}
+
+.updates .upd-snapshot-json:focus {
+  outline: none;
+  box-shadow: var(--ring-focus);
+}
+
+.updates .upd-snapshot-json::placeholder {
+  color: var(--ink-disabled);
+}
+
+.updates .upd-snapshot-warnings {
+  margin: 0;
+  padding-left: var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  color: var(--warn);
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+}
+
+.updates .upd-snapshot-result-head {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.updates .upd-snapshot-clean {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--ok);
+  font-size: var(--body-sm);
+}
+
+/* ---- empty state extras ---- */
+
+.updates .upd-empty-icon {
+  color: var(--ink-faint);
+}
+
+.updates .upd-empty-actions {
+  display: flex;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+}
+
+/* ---- version history modal (surface-2 dialog, focus-trapped) ---- */
+
+.upd-modal-root {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.upd-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-6);
+  pointer-events: auto;
+}
+
+.upd-modal {
+  background: var(--surface-2);
+  box-shadow: var(--shadow-2);
+  border-radius: var(--r-xl);
+  padding: var(--sp-6);
+  width: min(560px, 100%);
+  max-height: min(640px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.upd-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.upd-modal-title {
+  font-size: var(--headline);
+  font-weight: var(--headline-w);
+  line-height: var(--headline-lh);
+  letter-spacing: var(--headline-ls);
+}
+
+.upd-modal-body {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.upd-modal-foot {
+  color: var(--ink-faint);
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+}
+
+.upd-modal-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3) 0;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+
+.upd-modal-row:last-child {
+  border-bottom: none;
+}
+
+.upd-modal-row-main {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.upd-modal-version {
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+}
+
+.upd-modal-row.is-current .upd-modal-version {
+  color: var(--ink);
+}
+
+.upd-modal-provider,
+.upd-modal-date {
+  color: var(--ink-faint);
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+}
+
+.upd-modal-side {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+
+.upd-modal-current {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--ok-dim);
+  color: var(--ok);
+  font-size: var(--micro);
+  line-height: var(--micro-lh);
+  font-weight: 500;
+}
+
+.upd-modal-empty {
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+  padding: var(--sp-4) 0;
+}
+
+/* ---- below 810px: per-item cards over horizontal scroll (DESIGN.md) ---- */
+
+@media (max-width: 810px) {
+  .updates .upd-row,
+  .updates .upd-managed-row {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .updates .upd-row-action,
+  .updates .upd-managed-actions {
+    justify-content: flex-start;
+  }
+
+  .updates .upd-snapshot-cols {
+    grid-template-columns: 1fr;
+  }
+}

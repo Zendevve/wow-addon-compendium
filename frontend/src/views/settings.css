@@ -1,0 +1,523 @@
+/* Settings view: config rows, per-install status cards, about.
+   Layout voice: headline section titles on canvas, content on surface-1
+   cards. The install grid is canvas with surface-1 cards (no nested card). */
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.section-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+
+.section-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  max-width: 560px;
+}
+
+.section-title {
+  font-size: var(--headline);
+  font-weight: var(--headline-w);
+  line-height: var(--headline-lh);
+  letter-spacing: var(--headline-ls);
+  color: var(--ink);
+}
+
+.section-desc {
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+}
+
+.section-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.toolbar-summary {
+  font-size: var(--caption);
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+/* ---- config rows ---- */
+
+.cfg-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.cfg-group {
+  padding: var(--sp-3) var(--sp-5) 0;
+  font-size: var(--micro);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.cfg-group + .cfg-group {
+  margin-top: var(--sp-3);
+  border-top: 1px solid var(--hairline-soft);
+}
+
+.cfg-row {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--sp-3) var(--sp-4);
+  padding: var(--sp-3) var(--sp-5);
+  border-bottom: 1px solid var(--hairline-soft);
+}
+
+.cfg-row:last-of-type {
+  border-bottom: 0;
+}
+
+.cfg-key {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cfg-label {
+  font-size: var(--body-sm);
+  font-weight: var(--body-sm-w);
+  color: var(--ink);
+}
+
+.cfg-hint {
+  font-size: var(--micro);
+  line-height: var(--micro-lh);
+  color: var(--ink-faint);
+}
+
+.cfg-field {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.cfg-input {
+  height: 40px;
+  padding: 0 14px;
+  font-size: var(--body-sm);
+}
+
+.cfg-input.mono {
+  font-family: var(--font-mono);
+  font-size: var(--body-sm);
+  letter-spacing: 0;
+}
+
+.cfg-value {
+  justify-self: end;
+}
+
+/* ---- toggle switch (view-local component: on = white track, off = surface-2) ---- */
+
+.switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 44px;
+  height: 24px;
+  flex: none;
+}
+
+.switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.switch-track {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline-strong);
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--r-full);
+  background: var(--ink-muted);
+  transition: transform 140ms ease, background-color 120ms ease;
+}
+
+.switch input:checked ~ .switch-track {
+  background: var(--canvas-inverse);
+  border-color: var(--canvas-inverse);
+}
+
+.switch input:checked ~ .switch-thumb {
+  transform: translateX(22px);
+  background: var(--on-primary, #0b0b0a);
+}
+
+.switch input:focus-visible ~ .switch-track {
+  box-shadow: var(--ring-focus);
+}
+
+.switch input:disabled ~ .switch-track,
+.switch input:disabled ~ .switch-thumb {
+  opacity: 0.55;
+}
+
+/* ---- install cards ---- */
+
+.install-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--sp-5);
+}
+
+.install-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  background: var(--surface-1);
+  border-radius: var(--r-xl);
+  padding: var(--sp-5);
+  min-width: 0;
+}
+
+.install-card.missing {
+  opacity: 0.75;
+}
+
+.install-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.install-path {
+  font-size: var(--body-sm);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.flavor-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: var(--micro);
+  font-weight: 500;
+  line-height: 1.5;
+  flex: none;
+}
+
+.install-version {
+  font-size: var(--micro);
+  color: var(--ink-faint);
+  flex: none;
+}
+
+.confidence-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--r-sm);
+  font-size: var(--micro);
+  font-weight: 500;
+  line-height: 1.5;
+  flex: none;
+}
+
+.confidence-chip.ok { background: var(--ok-dim); color: var(--ok); }
+.confidence-chip.warn { background: var(--warn-dim); color: var(--warn); }
+.confidence-chip.error { background: var(--error-dim); color: var(--error); }
+
+.install-missing {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--warn);
+  font-size: var(--body-sm);
+}
+
+.install-band {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.install-score {
+  font-family: var(--font-mono);
+  font-size: var(--title);
+  font-weight: 500;
+  line-height: 1;
+  color: var(--ink);
+  font-feature-settings: "tnum";
+}
+
+.install-denom {
+  font-size: var(--body-sm);
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+}
+
+.install-band-label {
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  margin-left: var(--sp-1);
+}
+
+.install-band-label.ok { color: var(--ok); }
+.install-band-label.warn { color: var(--warn); }
+.install-band-label.error { color: var(--error); }
+
+.install-healthbar {
+  flex: 1;
+  height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.install-healthbar > i {
+  display: block;
+  height: 100%;
+  border-radius: var(--r-pill);
+  background: var(--ink-faint);
+}
+
+.install-healthbar.ok > i { background: var(--ok); }
+.install-healthbar.warn > i { background: var(--warn); }
+.install-healthbar.error > i { background: var(--error); }
+
+.install-stats {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+
+.stat-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--caption);
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.stat-item .stat-num {
+  font-family: var(--font-mono);
+  color: var(--ink);
+  font-feature-settings: "tnum";
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-full);
+  background: var(--ink-faint);
+  flex: none;
+}
+
+.status-dot.ok { background: var(--ok); }
+.status-dot.warn { background: var(--warn); }
+.status-dot.error { background: var(--error); }
+
+.install-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+/* ---- sync (update-all) result: end-of-batch per-install dump ---- */
+
+.sync-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  background: var(--surface-1);
+  border-radius: var(--r-xl);
+  padding: var(--sp-4) var(--sp-5);
+}
+
+.sync-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--body-sm);
+  color: var(--ink);
+}
+
+.sync-summary-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--ok);
+}
+
+.sync-summary-icon.has-errors {
+  color: var(--warn);
+}
+
+.sync-summary .sync-nums {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+}
+
+.sync-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding-left: var(--sp-6);
+}
+
+.sync-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sync-root {
+  font-size: var(--body-sm);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sync-errors {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--sp-1);
+}
+
+.sync-errors li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--error);
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+}
+
+.sync-errors li svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+/* ---- about ---- */
+
+.about-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.about-version {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.about-version .about-app {
+  font-family: var(--font-display);
+  font-size: var(--sub);
+  font-weight: 500;
+  line-height: var(--sub-lh);
+  letter-spacing: var(--sub-ls);
+  color: var(--ink);
+}
+
+.about-version .about-ver {
+  font-family: var(--font-mono);
+  font-size: var(--body-sm);
+  color: var(--ink-faint);
+}
+
+.about-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+  font-size: var(--body-sm);
+  color: var(--ink-muted);
+}
+
+.about-meta .mono {
+  color: var(--ink-faint);
+  font-size: var(--caption);
+}
+
+.about-note {
+  font-size: var(--body-sm);
+  color: var(--ink-muted);
+  max-width: 60ch;
+}
+
+/* ---- loading / error ---- */
+
+.section-error {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-lg);
+  background: var(--error-dim);
+  color: var(--error);
+  font-size: var(--body-sm);
+}
+
+.list-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-6);
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+}
+
+.loading-pulse {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--r-full);
+  background: var(--ink-faint);
+  animation: pulse 1.2s ease-in-out infinite;
+  flex: none;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}

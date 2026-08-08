@@ -4,6 +4,40 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - 2026-08-08
+
+### Added
+
+- **Ground-up GUI-only rebuild** — the CLI (`cmd/wowfix`) is removed; wowfix is now a Wails v2 desktop app only.
+- **Frontend rewritten from scratch** — vanilla TypeScript + Vite, implementing the Framer design language per `DESIGN.md` (near-black canvas, white-pill CTAs, accent blue for links/focus only, gradient spotlight cards, Inter Variable with OpenType variants, Mona Sans Variable for display).
+- **Eight destinations** — Setup, Overview (Scan/Doctor/Validation segmented), Catalog, Updates, Collections, Backups, SavedVariables, Settings.
+- **Mock mode for dev/screenshots** — `?mock=1&view=<view>` in Vite dev server seeds every destination with realistic data (no Go backend required).
+- **30-project competitor study distilled** — `docs/LEARNINGS.md` captures field analysis, adoptions for v3 (R1–R15 roadmap), and consolidated anti-patterns; corpus in `refs/competitors/` (gitignored).
+
+### Changed
+
+- **Repair engine** — scan/fix/repair engine carried from v2: GitHub folder names, TOC mismatches, nested folders, missing/multiple TOCs, empty folders, duplicates, broken extraction structures; fix-all with backups and OS-trash removal.
+- **TOC validation** — 9 profiles (Vanilla 1.12, TurtleWoW, TBC 2.4.3, WotLK 3.3.5a, Cataclysm, Classic Era, Hardcore, Season of Discovery, Retail) carried unchanged.
+- **Catalog & install** — 5 providers (GitHub, CurseForge, WoWInterface, Tukui, Wago) with parallel search, merged results, ZIP browse/drag-drop, curated private-server sets (vanilla-family, ChromieCraft), Wago WeakAuras/Plater imports.
+- **Updates** — bulk pre-check → cache-only loop; review list with old→new versions and in-app changelog; per-addon Pin/Ignore/History/Rollback; honest per-addon failure surfacing; provider outage surfacing (never silent suppression).
+- **Collections** — named addon loadouts with enable toggles; `.disabled` rename switching; duplicate/rename/delete; backup-before-switch.
+- **SavedVariables** — per-account backup/restore/reset/migrate; auto-backup on first list; manual backup always available.
+- **Backups & snapshots** — timestamped `Backups/<ts>/` before every mutation; restore snapshots current state first; offline catalog snapshot export/check.
+- **Safety model** — confirm → backup → trash (never permanent delete); graceful permission errors.
+- **Import/Export** — JSON/YAML manifests, bundle ZIPs (manifest + local addons + SavedVariables), GitHub repo lists.
+- **Install detection** — Retail/Classic/etc. auto-detection; private-server client detection (known exe or Interface folder); PE version parsing.
+- **Config** — `wow_path`, `flavor`, `profile`, `auto_backup`, `confirmations`, `backups_dir`, `curseforge_api_key`, `collection`, `collections_dir` (theme removed; dark-only).
+
+### Removed
+
+- **CLI** — `cmd/wowfix` deleted; all CLI commands (`scan`, `fix`, `install`, `validate`, `list`, `search`, `update`, `history`, `rollback`, `snapshot`, `sources`, `curated`, `backup`, `restore`, `doctor`, `config`, `profile`, `savedvars`, `export`, `import`, `version`) removed.
+- **Cross-compile targets** — Linux/macOS CLI builds dropped (Windows GUI only; cross-platform capable via Wails but not shipped).
+- **Terminal UI references** — Bubble Tea TUI was already removed in v2.0.0.
+- **`theme` config key** — UI is dark-only; key no longer stored or read.
+
+### Archived
+
+- **v2.3.0** tagged and archived on branch `archive/v2-legacy` with a zip in the parent `archive/` directory.
 ## [2.3.0] - 2026-08-08
 
 ### Added

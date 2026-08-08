@@ -1,0 +1,234 @@
+/* ==========================================================================
+   Backups view — snapshot history table (canvas rows, hairline-soft
+   underlines; collapses to per-item cards below 810px per DESIGN.md) plus
+   the Updates cross-link note. Tokens only.
+   ========================================================================== */
+
+.backups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.backups-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+
+.backups-count {
+  color: var(--ink-muted);
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  line-height: var(--caption-lh);
+  letter-spacing: var(--caption-ls);
+}
+
+.backups-hint {
+  color: var(--ink-faint);
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+}
+
+/* ---- snapshot table ---- */
+
+.backups-table-wrap {
+  overflow-x: auto;
+}
+
+.backups-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+  letter-spacing: var(--body-sm-ls);
+}
+
+.backups-table th {
+  text-align: left;
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--ink-faint);
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  line-height: var(--caption-lh);
+  letter-spacing: var(--caption-ls);
+  border-bottom: 1px solid var(--hairline);
+  white-space: nowrap;
+}
+
+.backups-table td {
+  padding: var(--sp-3);
+  border-bottom: 1px solid var(--hairline-soft);
+  vertical-align: middle;
+}
+
+.backups-table tbody tr:hover {
+  background: var(--surface-1);
+}
+
+.backups-id {
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.backups-when {
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.backups-reason {
+  color: var(--ink-muted);
+  max-width: 42ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.backups-folders {
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.backups-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.backups-btn-small {
+  height: 32px;
+  padding: 0 var(--sp-3);
+  gap: 6px;
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  line-height: var(--caption-lh);
+  letter-spacing: var(--caption-ls);
+}
+
+/* ---- Updates cross-link note ---- */
+
+.backups-note {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+  background: var(--surface-1);
+  border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-4);
+  margin-top: var(--sp-1);
+}
+
+.backups-note svg {
+  flex: none;
+  color: var(--ink-faint);
+}
+
+/* ---- shared states ---- */
+
+.backups-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+  padding: var(--sp-6) 0;
+}
+
+.backups-error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  color: var(--error);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+  background: var(--error-dim);
+  border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-4);
+}
+
+.backups-error svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.backups-error-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.backups-error-body p {
+  overflow-wrap: anywhere;
+}
+
+.backups-spin {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--hairline-strong);
+  border-top-color: var(--ink);
+  border-radius: var(--r-full);
+  animation: backups-spin 700ms linear infinite;
+}
+
+@keyframes backups-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---- <810px: wide table collapses to per-item cards (DESIGN.md) ---- */
+
+@media (max-width: 810px) {
+  .backups-table,
+  .backups-table tbody,
+  .backups-table tr,
+  .backups-table td {
+    display: block;
+  }
+
+  .backups-table thead {
+    display: none;
+  }
+
+  .backups-table tr {
+    background: var(--surface-1);
+    border-radius: var(--r-lg);
+    padding: var(--sp-3);
+    margin-bottom: var(--sp-3);
+  }
+
+  .backups-table td {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--sp-3);
+    border-bottom: 0;
+    padding: var(--sp-2) 0;
+  }
+
+  .backups-table td::before {
+    content: attr(data-label);
+    flex: none;
+    color: var(--ink-faint);
+    font-size: var(--caption);
+    font-weight: var(--caption-w);
+    line-height: var(--caption-lh);
+    letter-spacing: var(--caption-ls);
+  }
+
+  .backups-reason {
+    max-width: none;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  .backups-actions {
+    justify-content: flex-start;
+  }
+}

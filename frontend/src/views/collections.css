@@ -1,0 +1,503 @@
+/* ==========================================================================
+   Collections view — loadout list (rows on canvas, active = lift + accent
+   bar) and the export/import surface (surface-1 cards). All classes are
+   prefixed to stay slice-local; tokens only, per DESIGN.md.
+   ========================================================================== */
+
+.collections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.collections-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+
+.collections-count {
+  color: var(--ink-muted);
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  line-height: var(--caption-lh);
+  letter-spacing: var(--caption-ls);
+}
+
+/* ---- create form: inline prompt, input on canvas (input is surface-1) ---- */
+
+.collections-create {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.collections-create .text-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---- collection rows ---- */
+
+.collection-item {
+  border-bottom: 1px solid var(--hairline-soft);
+}
+
+.collection-item:last-child {
+  border-bottom: 0;
+}
+
+.collection-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-2);
+}
+
+.collection-row:hover {
+  background: var(--surface-1);
+  border-radius: var(--r-md);
+}
+
+/* Active = selection: surface lift + the single accent as a selected
+   indicator (never a fill). */
+.collection-row.is-active {
+  background: var(--surface-1);
+  border-radius: var(--r-md);
+}
+
+.collection-row.is-active::before {
+  content: "";
+  flex: none;
+  width: 2px;
+  align-self: stretch;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+}
+
+.collection-info {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.collection-name {
+  color: var(--ink);
+  font-size: var(--body-sm);
+  font-weight: var(--body-sm-w);
+  line-height: var(--body-sm-lh);
+  letter-spacing: var(--body-sm-ls);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.collection-count {
+  color: var(--ink-faint);
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+  white-space: nowrap;
+}
+
+.collection-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: none;
+}
+
+.collection-current {
+  color: var(--ink-faint);
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  line-height: var(--caption-lh);
+  letter-spacing: var(--caption-ls);
+}
+
+/* ---- small buttons (components.css has no small variant) ---- */
+
+.collections-btn-small {
+  height: 32px;
+  padding: 0 var(--sp-3);
+  gap: 6px;
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  line-height: var(--caption-lh);
+  letter-spacing: var(--caption-ls);
+}
+
+/* ---- status chips: semantic dims from tokens ---- */
+
+.collections-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
+  color: var(--ink-muted);
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  line-height: var(--caption-lh);
+  letter-spacing: var(--caption-ls);
+  white-space: nowrap;
+}
+
+.collections-chip.is-ok {
+  background: var(--ok-dim);
+  color: var(--ok);
+}
+
+/* ---- expandable detail: per-addon enable toggles ---- */
+
+.collection-detail {
+  padding: var(--sp-2) var(--sp-2) var(--sp-4);
+}
+
+.collection-detail-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-2);
+}
+
+.collection-detail-title {
+  font-size: var(--headline);
+  font-weight: var(--headline-w);
+  line-height: var(--headline-lh);
+  letter-spacing: var(--headline-ls);
+}
+
+.collection-detail-hint {
+  color: var(--ink-faint);
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+}
+
+.collection-detail-empty {
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+}
+
+.collection-addons {
+  display: flex;
+  flex-direction: column;
+}
+
+.collection-addon {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-2);
+  border-bottom: 1px solid var(--hairline-soft);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+}
+
+.collection-addon:last-child {
+  border-bottom: 0;
+}
+
+.collection-addon:hover {
+  background: var(--surface-1);
+  border-radius: var(--r-sm);
+}
+
+.collection-addon-folder {
+  color: var(--ink);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.collection-addon .collections-chip {
+  margin-left: auto;
+}
+
+/* Toggle switch: off = charcoal track / muted knob; on = the primary white
+   fill with a dark knob (the CTA language, not a chromatic fill). */
+.collections-switch {
+  position: relative;
+  flex: none;
+  width: 38px;
+  height: 22px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline-strong);
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.collections-switch .switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--r-full);
+  background: var(--ink-muted);
+  transition: transform 120ms ease, background-color 120ms ease;
+}
+
+.collections-switch.is-on {
+  background: var(--canvas-inverse);
+  border-color: var(--canvas-inverse);
+}
+
+.collections-switch.is-on .switch-knob {
+  transform: translateX(16px);
+  background: #0b0b0a;
+}
+
+.collections-switch:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* ---- export / import surface ---- */
+
+.collections-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+}
+
+.collections-section-title {
+  font-family: var(--font-display);
+  font-size: var(--title);
+  font-weight: 500;
+  line-height: var(--title-lh);
+  letter-spacing: var(--title-ls);
+}
+
+.collections-section-sub {
+  color: var(--ink-muted);
+  font-size: var(--body);
+  line-height: var(--body-lh);
+  max-width: 62ch;
+}
+
+.transfer-grid {
+  display: grid;
+  gap: var(--sp-5);
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+
+.transfer-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  background: var(--surface-1);
+  border-radius: var(--r-xl);
+  padding: var(--sp-5);
+}
+
+.transfer-card-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.transfer-title {
+  font-size: var(--sub);
+  font-weight: 500;
+  line-height: var(--sub-lh);
+  letter-spacing: var(--sub-ls);
+}
+
+.transfer-sub {
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.field-label {
+  color: var(--ink-muted);
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  line-height: var(--caption-lh);
+  letter-spacing: var(--caption-ls);
+}
+
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.field-row .text-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.field-row .collections-btn-small {
+  flex: none;
+}
+
+/* Native select over the text-input skin, with a chevron. */
+select.text-input {
+  appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23999999' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6.5 9.5 5.5 5.5 5.5-5.5'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 34px;
+  cursor: pointer;
+}
+
+/* Checkbox: white fill when checked (primary language), blue ring on focus. */
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+  cursor: pointer;
+  user-select: none;
+}
+
+.check-row input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+}
+
+.check-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border-field);
+  background: var(--surface-1);
+  color: transparent;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.check-row input:checked + .check-box {
+  background: var(--canvas-inverse);
+  border-color: var(--canvas-inverse);
+  color: #0b0b0a;
+}
+
+.check-row input:focus-visible + .check-box {
+  box-shadow: var(--ring-focus);
+}
+
+.check-row input:disabled + .check-box {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.check-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.check-hint {
+  color: var(--ink-faint);
+  font-size: var(--micro);
+  line-height: var(--micro-lh);
+}
+
+.transfer-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.transfer-result {
+  color: var(--ink-faint);
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.transfer-installed {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+.transfer-installed-label {
+  color: var(--ink-muted);
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+  margin-right: var(--sp-1);
+}
+
+/* ---- shared states ---- */
+
+.collections-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+  padding: var(--sp-6) 0;
+}
+
+.collections-error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  color: var(--error);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+  background: var(--error-dim);
+  border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-4);
+}
+
+.collections-error svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.collections-error-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.collections-error-body p {
+  overflow-wrap: anywhere;
+}
+
+.collections-spin {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--hairline-strong);
+  border-top-color: var(--ink);
+  border-radius: var(--r-full);
+  animation: collections-spin 700ms linear infinite;
+}
+
+@keyframes collections-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

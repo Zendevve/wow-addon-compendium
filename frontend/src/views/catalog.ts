@@ -1,61 +1,36 @@
-// Catalog: search addon providers (GitHub / CurseForge / WowInterface /
-// Tukui), filter by provider chip, and install from the catalog or a pasted
-// URL / owner-repo. Installs always confirm first; results offer a hook to
-// jump to the scan view.
+// Catalog — the single install surface. Search five providers (debounced,
+// with per-provider filter chips whose tooltips carry the Sources()
+// caveats), install from a result row, from the install bar (URL /
+// owner-repo / addon name), or from a browsed/dropped ZIP. Curated
+// private-server sets sit above the search as ≤2 gradient spotlight cards;
+// Wago import strings save from their own section or from wago rows.
+// Provider outages surface in the search error box — never suppressed.
+// Install outcomes render per-addon status chips plus every error the
+// backend reported (LEARNINGS #5/#6).
 
-import type { AppState, Actions } from "../app";
+import type { View } from "../view";
+import "./catalog.css";
+
+import { mockActive, service } from "../api";
+import { confirmDialog } from "../dialog";
+import { icon, type IconName } from "../icons";
+import { toast } from "../toast";
+import { formatBytes } from "../types";
 import type {
   CatalogEntry,
-  SearchCatalogResult,
-  InstallSourceResult,
-  InstallResult,
-  WagoImportResult,
   CuratedAddon,
   CuratedResult,
-  Provider,
   InfoResult,
+  InstallResult,
+  Provider,
   ProviderInfo,
+  SearchCatalogResult,
+  WagoImportResult,
 } from "../types";
-import { formatBytes } from "../types";
-import { icon, type IconName } from "../icons";
-import { service } from "../api";
-import { toast } from "../components/toast";
-import { confirmDialog } from "../components/dialog";
-import {
-  pickZipPath,
-  startZipInstall,
-  startZipInstallFromFile,
-} from "./install";
 
-// `matches` on InfoResult is the candidate list for an ambiguous bare-name
-// lookup (the CLI's `wowfix info` search hits). Only provider/name/id are
-// guaranteed; the rest are optional so the UI degrades gracefully.
-interface InfoMatch {
-  provider?: string;
-  id?: string;
-  name?: string;
-}
+const DEBOUNCE_MS = 350;
 
-// Unified install outcome for the result panel: both the catalog-source
-// flow (InstallSourceResult, name arrays) and the ZIP flow (InstallResult,
-// counts) normalize onto these counts.
-interface InstallSummary {
-  installed: number;
-  replaced: number;
-  skipped: number;
-  errors: string[];
-}
-
-function summaryOfSource(r: InstallSourceResult): InstallSummary {
-  return {
-    installed: r.installed.length,
-    replaced: r.replaced.length,
-    skipped: r.skipped.length,
-    errors: r.errors,
-  };
-}
-
-const PROVIDER_LABEL: Record<string, string> = {
+const PROVIDER_LABEL: Record<Provider, string> = {
   github: "GitHub",
   curseforge: "CurseForge",
   wowinterface: "WowInterface",
@@ -63,16 +38,13 @@ const PROVIDER_LABEL: Record<string, string> = {
   wago: "Wago",
 };
 
-const FILTERS: { value: "all" | Provider; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "github", label: "GitHub" },
-  { value: "curseforge", label: "CurseForge" },
-  { value: "wowinterface", label: "WowInterface" },
-  { value: "tukui", label: "Tukui" },
-  { value: "wago", label: "Wago" },
+const PROVIDER_ORDER: Provider[] = [
+  "github",
+  "curseforge",
+  "wowinterface",
+  "tukui",
+  "wago",
 ];
-
-const DEBOUNCE_MS = 350;
 
 // Classic-era catalog flavors all mean "vanilla" for compatibility
 // (mirrors the backend's knownGameFamilies map).
@@ -88,14 +60,16 @@ const GAME_VERSION_NORMAL: Record<string, string> = {
 const FAMILY_NORMAL: Record<string, string> = {
   vanilla: "vanilla",
   turtle: "vanilla",
-  tbc: "tbc",
-  wrath: "wrath",
-  cata: "cata",
   classic: "vanilla",
   hardcore: "vanilla",
   sod: "vanilla",
+  tbc: "tbc",
+  wrath: "wrath",
+  cata: "cata",
   retail: "retail",
 };
+
+const GRADIENTS = ["-violet", "-magenta", "-orange", "-coral"];
 
 function normalizeFamily(s: string): string {
   const k = s.trim().toLowerCase();
@@ -107,31 +81,46 @@ function normalizeGameVersion(s: string): string {
   return GAME_VERSION_NORMAL[k] ?? k;
 }
 
-export function mountCatalog(
-  el: HTMLElement,
-  app: AppState,
-  actions: Actions,
-): { refresh: () => void } {
+// The debounce timer lives at module scope so unmount() can cancel a
+// pending search when the router swaps views.
+let debounceTimer = 0;
+
+export const view: View = {
+  id: "catalog",
+  label: "Catalog",
+  icon: "search",
+  mount(host) {
+    mountCatalog(host);
+  },
+  unmount() {
+    window.clearTimeout(debounceTimer);
+  },
+};
+
+function mountCatalog(el: HTMLElement): void {
   let query = "";
   let provider: "all" | Provider = "all";
+  let compatOnly = false;
   let result: SearchCatalogResult | null = null;
   let searching = false;
   let installing = false;
+  let busySource: string | null = null; // the source whose control shows the spinner
   let saving = false;
-  let installResult: InstallSummary | null = null;
+  let savingId: string | null = null; // the wago id whose control shows the spinner
+  let installResult: InstallResult | null = null;
+  let wagoArg = "";
   let wagoResult: WagoImportResult | null = null;
-  let timer = 0;
   let curated: CuratedResult | null = null;
-  let compatOnly = false;
-  // --- addon info + sources (CLI `info` / `sources` parity) ----------------
+  let curatedError = false;
+  let sources: ProviderInfo[] | null = null;
   let info: InfoResult | null = null;
   let infoLoading = false;
   let infoErr: string | null = null;
   let infoArg = "";
-  let sourcesOpen = false;
-  let sources: ProviderInfo[] | null = null;
-  let sourcesLoading = false;
-  let sourcesErr: string | null = null;
+  let pendingFocus: string | null = null;
+  let barSource: string | null = null; // source submitted from the install bar
+
+  // --- search ------------------------------------------------------------
 
   const doSearch = async (q: string): Promise<void> => {
     query = q;
@@ -153,249 +142,150 @@ export function mountCatalog(
     }
   };
 
-  // --- focus preservation ------------------------------------------------
-  // Re-renders rebuild the view DOM, dropping keyboard focus to <body>.
-  // Capture the focused control before a re-render and restore focus to its
-  // replacement after. pendingFocus survives async flows (install / save)
-  // whose final re-render happens after the backend call, while the control
-  // is disabled.
-  let pendingFocus: string | null = null;
-
-  const focusKeyOf = (el: HTMLElement): string | null => {
-    if (el.closest(".search-clear") || el.closest("[data-search]")) return "search";
-    if (el.closest("[data-source]")) return "source";
-    if (el.closest("[data-browse]")) return "browse";
-    const filter = el.closest<HTMLElement>("[data-filter]");
-    if (filter) return `filter:${filter.dataset.filter}`;
-    if (el.closest("[data-compat-toggle]")) return "compat";
-    const install = el.closest<HTMLElement>("[data-install-row]");
-    if (install) return `install:${install.dataset.installRow}`;
-    const save = el.closest<HTMLElement>("[data-save-import]");
-    if (save) return `save:${save.dataset.saveImport}`;
-    const curated = el.closest<HTMLElement>("[data-curated-install]");
-    if (curated) return `curated:${curated.dataset.curatedInstall}`;
-    const infoBtn = el.closest<HTMLElement>("[data-info-row]");
-    if (infoBtn) return `info:${infoBtn.dataset.infoRow}`;
-    const matchBtn = el.closest<HTMLElement>("[data-info-match]");
-    if (matchBtn) return `info-match:${matchBtn.dataset.infoMatch}`;
-    if (el.closest("[data-info-close]")) return "info-close";
-    if (el.closest("[data-sources-toggle]")) return "sources";
-    if (el.closest("[data-rescan]")) return "rescan";
-    if (el.closest("[data-install]")) return "install";
-    return null;
-  };
-
-  const restoreFocus = (key: string | null): boolean => {
-    if (!key) return false;
-    let target: HTMLElement | null = null;
-    if (key === "search") {
-      const input = el.querySelector<HTMLInputElement>("[data-search]");
-      if (input) {
-        input.focus();
-        input.setSelectionRange(input.value.length, input.value.length);
-        return true;
-      }
-      return false;
-    }
-    if (key === "source") {
-      target = el.querySelector<HTMLInputElement>("[data-source]");
-    } else if (key === "browse") {
-      target = el.querySelector<HTMLElement>("[data-browse]");
-    } else if (key === "install") {
-      target = el.querySelector<HTMLElement>("[data-install]");
-    } else if (key === "sources") {
-      target = el.querySelector<HTMLElement>("[data-sources-toggle]");
-    } else {
-      const [kind, id] = key.split(":");
-      if (kind === "filter") target = el.querySelector<HTMLElement>(`[data-filter="${id}"]`);
-      else if (kind === "compat") target = el.querySelector<HTMLElement>("[data-compat-toggle]");
-      else if (kind === "install") target = el.querySelector<HTMLElement>(`[data-install-row="${id}"]`);
-      else if (kind === "save") target = el.querySelector<HTMLElement>(`[data-save-import="${id}"]`);
-      else if (kind === "curated") target = el.querySelector<HTMLElement>(`[data-curated-install="${id}"]`);
-      else if (kind === "info") target = el.querySelector<HTMLElement>(`[data-info-row="${id}"]`);
-      else if (kind === "info-match") target = el.querySelector<HTMLElement>(`[data-info-match="${id}"]`);
-      else if (kind === "info-close") target = el.querySelector<HTMLElement>("[data-info-close]");
-      else if (kind === "rescan") target = el.querySelector<HTMLElement>("[data-rescan]");
-    }
-    if (!target) return false;
-    if (target.hasAttribute("disabled")) return false;
-    target.focus();
-    return true;
-  };
-
-  // Render with focus preservation: capture what had focus, render, restore.
-  // In-flight work keeps pendingFocus alive so the final render can land it.
-  const rerender = (): void => {
-    const active = document.activeElement;
-    const key = pendingFocus ?? (active instanceof HTMLElement ? focusKeyOf(active) : null);
-    render();
-    if (!key) return;
-    if (restoreFocus(key)) pendingFocus = null;
-    else if (!searching && !installing && !saving && !infoLoading && !sourcesLoading) pendingFocus = null;
-  };
-
   const scheduleSearch = (): void => {
-    window.clearTimeout(timer);
-    timer = window.setTimeout(() => void doSearch(query), DEBOUNCE_MS);
+    window.clearTimeout(debounceTimer);
+    debounceTimer = window.setTimeout(() => void doSearch(query), DEBOUNCE_MS);
+  };
+
+  const clearSearch = (): void => {
+    query = "";
+    window.clearTimeout(debounceTimer);
+    result = null;
+    rerender();
+  };
+
+  // --- installs -----------------------------------------------------------
+
+  const markCuratedInstalled = (res: InstallResult): void => {
+    if (!curated) return;
+    const names = new Set([...res.installed, ...res.replaced]);
+    for (const a of curated.addons) {
+      if (names.has(a.name)) {
+        a.installed = true;
+        a.installed_version = undefined;
+      }
+    }
+  };
+
+  const applyInstallResult = (res: InstallResult): void => {
+    installResult = res;
+    markCuratedInstalled(res);
+    // Honest surfacing: never a blanket success toast when rows failed.
+    if (res.errors.length > 0) {
+      toast({
+        type: "error",
+        title: "Install finished with errors",
+        message: `${res.errors.length} error${res.errors.length === 1 ? "" : "s"} — see the result panel`,
+      });
+    } else if (res.installed.length > 0) {
+      toast({
+        type: "ok",
+        title: "Addon installed",
+        message:
+          `${res.installed.join(", ")}` +
+          `${res.replaced.length > 0 ? ` · ${res.replaced.length} replaced` : ""}` +
+          `${res.skipped.length > 0 ? ` · ${res.skipped.length} skipped` : ""}`,
+      });
+    } else if (res.replaced.length > 0) {
+      toast({ type: "ok", title: "Addon replaced", message: `${res.replaced.join(", ")} replaced after backup` });
+    } else if (res.skipped.length > 0) {
+      toast({ type: "info", title: "Already installed", message: "The addon exists and replace is off. Nothing changed." });
+    }
   };
 
   const installSource = async (source: string, label: string): Promise<void> => {
     if (installing) return;
     const confirmed = await confirmDialog({
       title: `Install ${label}?`,
-      message: `Install “${label}” from this source into your addons folder?`,
+      message: `Install “${label}” into your addons folder? An existing folder is backed up first.`,
       details: [source],
       confirmLabel: "Install",
     });
     if (!confirmed) return;
     installing = true;
+    busySource = source;
     rerender();
     try {
       const res = await service.InstallSource(source, true);
-      installResult = summaryOfSource(res);
-      if (res.errors.length > 0) {
-        toast({
-          type: "error",
-          title: "Install completed with errors",
-          message: `${res.errors.length} error${res.errors.length === 1 ? "" : "s"}. See the result panel`,
-        });
-      } else if (res.installed.length > 0) {
-        toast({
-          type: "ok",
-          title: "Addon installed",
-          message: `${res.installed.join(", ")} installed · ${res.replaced.length} replaced · ${res.skipped.length} skipped`,
-        });
-      } else if (res.replaced.length > 0) {
-        toast({
-          type: "ok",
-          title: "Addon replaced",
-          message: `Replaced ${res.replaced.join(", ")} after backup`,
-        });
-      } else if (res.skipped.length > 0) {
-        toast({
-          type: "info",
-          title: "Already installed",
-          message: "The addon exists and replace is off. Nothing was changed.",
-        });
-      }
+      applyInstallResult(res);
     } catch (err) {
       toast({ type: "error", title: "Install failed", message: errText(err) });
     } finally {
       installing = false;
+      busySource = null;
       rerender();
     }
   };
 
-  // ZIP installs reuse install.ts's flow: native picker (Browse…), HTML
-  // file input, and drag-drop all land here and write the same panel.
   const installZipPath = async (path: string): Promise<void> => {
     if (installing) return;
     installing = true;
+    busySource = path;
     rerender();
     try {
-      await startZipInstall(actions, path, false);
-      installResult = app.installResult;
+      const res = await service.InstallZip(path, false);
+      applyInstallResult(res);
+    } catch (err) {
+      toast({ type: "error", title: "Install failed", message: errText(err) });
     } finally {
       installing = false;
+      busySource = null;
       rerender();
     }
   };
 
   const installZipFile = async (file: File): Promise<void> => {
     if (installing) return;
-    installing = true;
-    rerender();
-    try {
-      // False when the file path could not be resolved (install.ts toasts).
-      const started = await startZipInstallFromFile(actions, file, false);
-      if (started) installResult = app.installResult;
-    } finally {
-      installing = false;
-      rerender();
+    const path = zipPathOf(file);
+    if (!path) {
+      toast({
+        type: "error",
+        title: "Could not resolve file path",
+        message: "This build cannot read the file location. Use Browse… instead.",
+      });
+      return;
     }
+    await installZipPath(path);
   };
 
-  const saveImport = async (entry: CatalogEntry): Promise<void> => {
-    if (saving) return;
+  // --- wago imports -------------------------------------------------------
+
+  const saveImport = async (id: string): Promise<void> => {
+    const arg = id.trim();
+    if (!arg || saving) return;
     saving = true;
+    savingId = arg;
     rerender();
     try {
-      const res = await service.SaveWagoImport(entry.id);
+      const res = await service.SaveWagoImport(arg);
       wagoResult = res;
+      wagoArg = arg;
       toast({ type: "ok", title: "Import saved", message: res.applied_hint });
     } catch (err) {
       toast({ type: "error", title: "Save failed", message: errText(err) });
     } finally {
       saving = false;
+      savingId = null;
       rerender();
     }
   };
 
+  // --- curated band -------------------------------------------------------
+
   const loadCurated = async (): Promise<void> => {
     try {
       curated = await service.Curated();
+      curatedError = false;
     } catch (err) {
       curated = null;
-      toast({
-        type: "error",
-        title: "Could not load recommendations",
-        message: errText(err),
-      });
+      curatedError = true;
+      toast({ type: "error", title: "Could not load recommendations", message: errText(err) });
     }
     rerender();
   };
 
-  const installCurated = async (addon: CuratedAddon): Promise<void> => {
-    if (installing) return;
-    const confirmed = await confirmDialog({
-      title: `Install ${addon.name}?`,
-      message: `Installs ${addon.source} via the catalog.`,
-      confirmLabel: "Install",
-    });
-    if (!confirmed) return;
-    installing = true;
-    rerender();
-    try {
-      const res = await service.InstallSource(addon.source, true);
-      installResult = summaryOfSource(res);
-      if (res.errors.length > 0) {
-        toast({
-          type: "error",
-          title: "Install completed with errors",
-          message: `${res.errors.length} error${res.errors.length === 1 ? "" : "s"}. See the result panel`,
-        });
-      } else if (res.installed.length > 0) {
-        toast({
-          type: "ok",
-          title: "Addon installed",
-          message: `${res.installed.join(", ")} installed · ${res.replaced.length} replaced · ${res.skipped.length} skipped`,
-        });
-      } else if (res.replaced.length > 0) {
-        toast({
-          type: "ok",
-          title: "Addon replaced",
-          message: `Replaced ${res.replaced.join(", ")} after backup`,
-        });
-      } else if (res.skipped.length > 0) {
-        toast({
-          type: "info",
-          title: "Already installed",
-          message: "The addon exists and replace is off. Nothing was changed.",
-        });
-      }
-    } catch (err) {
-      toast({ type: "error", title: "Install failed", message: errText(err) });
-    } finally {
-      installing = false;
-      // Re-fetch so the row flips to Installed.
-      await loadCurated();
-    }
-  };
+  // --- addon info ---------------------------------------------------------
 
-  // CLI `wowfix info` parity: resolve a hit's provider-scoped id (GitHub
-  // ids are "owner/repo"), or a bare name when no id is carried. An
-  // ambiguous bare name returns `matches` — the panel renders them and the
-  // user re-runs the lookup by clicking one.
   const fetchInfo = async (arg: string): Promise<void> => {
     if (infoLoading) return;
     infoArg = arg;
@@ -421,334 +311,547 @@ export function mountCatalog(
     rerender();
   };
 
-  // CLI `wowfix sources` parity: lazy-load the provider list on first open.
-  const toggleSources = (): void => {
-    sourcesOpen = !sourcesOpen;
-    if (sourcesOpen && sources === null && !sourcesLoading) {
-      sourcesLoading = true;
-      sourcesErr = null;
-      rerender();
-      service
-        .Sources()
-        .then((res) => {
-          sources = res;
-        })
-        .catch((err) => {
-          sourcesErr = errText(err);
-          toast({ type: "error", title: "Could not load sources", message: errText(err) });
-        })
-        .finally(() => {
-          sourcesLoading = false;
-          rerender();
-        });
-    } else {
-      rerender();
+  // --- provider details (chip tooltips) -----------------------------------
+
+  const loadSources = async (): Promise<void> => {
+    try {
+      sources = await service.Sources();
+    } catch (err) {
+      toast({ type: "warn", title: "Could not load provider details", message: errText(err) });
     }
+    rerender();
   };
 
-  const render = (): void => {
-    if (!app.state.has_install) {
-      el.innerHTML = emptyCard(
-        "folder",
-        "No WoW install configured",
-        "Set up your World of Warcraft path before installing addons.",
-        `<button class="btn btn-primary" data-go-setup>${icon("folder", 16)}<span>Go to setup</span></button>`,
-      );
-      el.querySelector("[data-go-setup]")?.addEventListener("click", () => actions.go("setup"));
-      return;
-    }
+  const normProviderName = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, "");
 
+  const sourceTooltip = (p: Provider): string => {
+    const desc = sources?.find((s) => normProviderName(s.name) === p)?.description;
+    return desc ?? `${PROVIDER_LABEL[p]} — provider status unknown right now.`;
+  };
+
+  // --- focus preservation -------------------------------------------------
+  // Rerenders rebuild the DOM and drop focus to <body>. Capture what had
+  // focus before the render and restore it after; pendingFocus survives
+  // async flows (install / save / info) whose final render happens after
+  // the backend call while the control is disabled.
+
+  const focusKeyOf = (active: HTMLElement): string | null => {
+    if (active.closest("[data-search]")) return "search";
+    if (active.closest("[data-source]")) return "source";
+    if (active.closest("[data-wago]")) return "wago";
+    const chip = active.closest<HTMLElement>("[data-filter]");
+    if (chip) return `filter:${chip.dataset.filter}`;
+    const row = active.closest<HTMLElement>("[data-install-row]");
+    if (row) return `install:${row.dataset.installRow}`;
+    const match = active.closest<HTMLElement>("[data-info-match]");
+    if (match) return `match:${match.dataset.infoMatch}`;
+    if (active.closest("[data-info-install]")) return "info-install";
+    if (active.closest("[data-info-close]")) return "info-close";
+    if (active.closest("[data-wago-save]")) return "wago-save";
+    if (active.closest("[data-curated-install]")) return "curated-install";
+    return null;
+  };
+
+  const restoreFocus = (key: string | null): boolean => {
+    if (!key) return false;
+    const find = <T extends HTMLElement>(sel: string): T | null => el.querySelector<T>(sel);
+    const simple: Record<string, string> = {
+      search: "[data-search]",
+      source: "[data-source]",
+      wago: "[data-wago]",
+      "info-install": "[data-info-install]",
+      "info-close": "[data-info-close]",
+      "wago-save": "[data-wago-save]",
+      "curated-install": "[data-curated-install]",
+    };
+    if (key in simple) {
+      const t = find(simple[key]);
+      if (t && !t.hasAttribute("disabled")) {
+        t.focus();
+        if (t instanceof HTMLInputElement) t.setSelectionRange(t.value.length, t.value.length);
+        return true;
+      }
+      return false;
+    }
+    const [kind, id] = key.split(":");
+    if (kind === "filter") {
+      const t = find<HTMLElement>(`[data-filter="${id}"]`);
+      if (t) {
+        t.focus();
+        return true;
+      }
+    } else if (kind === "install") {
+      const t = find<HTMLElement>(`[data-install-row="${id}"]`);
+      if (t && !t.hasAttribute("disabled")) {
+        t.focus();
+        return true;
+      }
+    } else if (kind === "match") {
+      const t = find<HTMLElement>(`[data-info-match="${id}"]`);
+      if (t) {
+        t.focus();
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const rerender = (): void => {
+    const active = document.activeElement;
+    const key = pendingFocus ?? (active instanceof HTMLElement ? focusKeyOf(active) : null);
+    render();
+    if (key && restoreFocus(key)) pendingFocus = null;
+    else if (!searching && !installing && !saving && !infoLoading) pendingFocus = null;
+  };
+
+  // --- render --------------------------------------------------------------
+
+  const render = (): void => {
     const results = result?.results ?? [];
-    const errors = result?.errors ?? [];
-    const family =
-      curated?.family ??
-      app.profiles.find((p) => p.id === app.state.profile_id)?.family ??
-      "";
-    const familyNorm = normalizeFamily(family);
+    const searchErrors = result?.errors ?? [];
+    const familyNorm = normalizeFamily(curated?.family ?? "");
     const compatOk = (r: CatalogEntry): boolean =>
       !r.game_version || normalizeGameVersion(r.game_version) === familyNorm;
     const filtered =
       provider === "all" ? results : results.filter((r) => r.provider === provider);
     const shown = compatOnly ? filtered.filter(compatOk) : filtered;
     const compatCount = results.filter(compatOk).length;
+    const uninstalled = (curated?.addons ?? []).filter((a) => !a.installed);
+    const featured = uninstalled.slice(0, 2);
+    const installedCount = (curated?.addons ?? []).length - uninstalled.length;
 
+    const chipsHtml = `
+      <button class="chip-btn${provider === "all" ? " active" : ""}" data-filter="all" aria-pressed="${provider === "all"}">
+        <span>All</span>${result ? `<span class="chip-count">${results.length}</span>` : ""}
+      </button>
+      ${PROVIDER_ORDER.map(
+        (p) => `
+        <button class="chip-btn${provider === p ? " active" : ""}" data-filter="${p}" aria-pressed="${provider === p}" title="${escapeAttr(sourceTooltip(p))}">
+          <span>${PROVIDER_LABEL[p]}</span>${result ? `<span class="chip-count">${results.filter((r) => r.provider === p).length}</span>` : ""}
+        </button>`,
+      ).join("")}
+      ${familyNorm
+        ? `<button class="chip-btn${compatOnly ? " active" : ""}" data-compat-toggle aria-pressed="${compatOnly}" title="Hide results built for other game versions">
+            ${icon("shield", 13)}<span>${escapeHtml(familyNorm)}</span>${compatOnly ? `<span class="chip-count">${compatCount}</span>` : ""}
+          </button>`
+        : ""}`;
+
+    const bandLabel = curated?.label || curated?.family || "";
     const curatedHtml =
       curated && curated.addons.length > 0
         ? `
-        <section class="curated" aria-label="Recommended addons">
-          <div class="curated-head spotlight">
-            <h2 class="curated-title spotlight-title">${icon("shield", 18)}<span>Recommended for ${escapeHtml(curated.label || "your server")}</span></h2>
-            <p class="curated-context spotlight-sub">Curated addon sets for private servers, installed from verified sources.</p>
+        <section class="curated" aria-label="Curated addons">
+          <div class="curated-head">
+            <h2 class="curated-title">${icon("shield", 18)}<span>Recommended for ${escapeHtml(bandLabel)}</span></h2>
+            <p class="curated-sub">Verified private-server sets, installed from the catalog source.</p>
           </div>
-          <div class="curated-rows">
-            ${curated.addons
+          <div class="curated-grid">
+            ${featured
               .map(
                 (a, i) => `
-              <div class="curated-row">
-                <div class="curated-info">
-                  <span class="curated-name">${escapeHtml(a.name)}</span>
-                  <span class="curated-summary">${escapeHtml(a.summary)}</span>
-                  <span class="curated-source mono">${escapeHtml(a.source)}</span>
-                </div>
-                <div class="curated-action">
-                  ${
-                    a.installed
-                      ? `<span class="tag tag-ok">Installed</span>${a.installed_version ? `<span class="curated-version mono muted">v${escapeHtml(a.installed_version)}</span>` : ""}`
-                      : `<button class="btn btn-primary btn-sm" data-curated-install="${i}" ${installing ? "disabled" : ""}>${icon("package", 14)}<span>Install</span></button>`
-                  }
-                </div>
-              </div>`,
+                <article class="spotlight-card curated-card ${GRADIENTS[i % GRADIENTS.length]}">
+                  <div class="curated-card-top">
+                    <span class="spotlight-kicker">Curated · ${escapeHtml(bandLabel)}</span>
+                    <span class="spotlight-title">${escapeHtml(a.name)}</span>
+                    <span class="spotlight-body">${escapeHtml(a.summary)}</span>
+                  </div>
+                  <div class="curated-card-foot">
+                    <span class="curated-source mono" title="${escapeAttr(a.homepage || a.source)}">${escapeHtml(a.source)}</span>
+                    <button class="btn-translucent" data-curated-install="${i}" ${installing ? "disabled" : ""}>
+                      ${installing && busySource === a.source ? `<span class="spinner"></span>` : icon("download", 14)}
+                      <span>${installing && busySource === a.source ? "Installing…" : "Install"}</span>
+                    </button>
+                  </div>
+                </article>`,
               )
               .join("")}
           </div>
+          ${installedCount > 0 ? `<p class="curated-more">${installedCount} of ${curated.addons.length} already installed — search above for more.</p>` : ""}
         </section>`
-        : "";
+        : curatedError
+          ? `<p class="curated-more">Recommendations are unavailable right now — search still works.</p>`
+          : "";
+
+    const resultsHtml = (() => {
+      if (!result) {
+        return emptyState(
+          "search",
+          "Search the addon catalog",
+          "Find addons across GitHub, CurseForge, WowInterface, Tukui and Wago — or paste a URL, owner/repo or addon name into the install bar.",
+        );
+      }
+      if (searching) {
+        return `<div class="list-loading"><span class="spinner"></span><span>Searching…</span></div>`;
+      }
+      if (shown.length === 0) {
+        const title =
+          compatOnly && filtered.length > 0
+            ? `No addons compatible with ${escapeHtml(familyNorm)}`
+            : query
+              ? `No addons found for “${escapeHtml(query)}”`
+              : "No addons found";
+        const body =
+          compatOnly && filtered.length > 0
+            ? "Try turning off the compatibility filter."
+            : "Try a different query or provider filter.";
+        return emptyState("search", title, body);
+      }
+      return `<div class="catalog-rows">${shown.map((r, i) => resultRow(r, i)).join("")}</div>`;
+    })();
+
+    const errorBox = searchErrors.length
+      ? `
+      <div class="error-box" role="alert">
+        <span class="error-box-head">${icon("alert", 15)}<span>${searchErrors.length === 1 ? "One provider reported a problem" : `${searchErrors.length} problems while searching`}</span></span>
+        <ul>${searchErrors.map((e) => `<li>${escapeHtml(e)}</li>`).join("")}</ul>
+      </div>`
+      : "";
+
+    const installPanel = installResult ? resultPanel(installResult) : "";
+    const wagoPanel = wagoResult ? wagoResultPanel(wagoResult) : "";
+    const infoPanel = infoPanelHtml();
 
     el.innerHTML = `
       <div class="catalog">
-        <div class="catalog-toolbar">
-          <div class="search-box search-box-lg">
-            <span class="search-icon">${icon("search", 16)}</span>
-            <input class="search-input" type="text" placeholder="Search addons by name, author or summary…" spellcheck="false" autocomplete="off"
-              value="${escapeAttr(query)}" aria-label="Search addon catalog" data-search />
-            ${
-              query
-                ? `<button class="search-clear" aria-label="Clear search">${icon("x", 14)}</button>`
-                : ""
-            }
-          </div>
-          <div class="install-bar" data-install-bar>
-            <span class="install-bar-icon">${icon("download", 16)}</span>
-            <input class="install-bar-input" type="text" placeholder="Install from URL or owner/repo…" spellcheck="false" autocomplete="off"
-              value="" aria-label="Install from URL or owner/repo" data-source />
-            <button class="btn btn-primary" data-install ${installing ? "disabled" : ""}>
-              ${installing ? `<span class="spinner"></span>` : icon("package", 15)}
-              <span>${installing ? "Installing…" : "Install"}</span>
+        <header class="catalog-head">
+          <h1 class="catalog-head-title">Catalog</h1>
+          <p class="catalog-head-sub">Search five providers and the curated set, then install straight from the results — or paste a source into the bar below.</p>
+        </header>
+
+        <section class="install-bar" data-bar aria-label="Install an addon">
+          <div class="install-bar-main">
+            <span class="install-bar-icon">${icon("download", 17)}</span>
+            <input class="text-input install-bar-input" data-source type="text"
+              placeholder="Paste a URL, owner/repo or addon name…" spellcheck="false" autocomplete="off"
+              aria-label="Install from URL or owner/repo" />
+            <button class="btn-primary" data-install ${installing ? "disabled" : ""}>
+              ${installing && busySource === barSource ? `<span class="spinner"></span>` : icon("download", 16)}
+              <span>${installing && busySource === barSource ? "Installing…" : "Install"}</span>
             </button>
-            <button class="btn btn-outline" data-browse ${installing ? "disabled" : ""}
-              title="Install a local addon ZIP archive">${icon("folder", 15)}<span>Browse…</span></button>
-            <input type="file" class="file-input" accept=".zip,application/zip,application/x-zip-compressed" hidden />
+            <button class="btn-secondary" data-browse ${installing ? "disabled" : ""} title="Install a local addon ZIP archive">
+              ${icon("folder", 16)}<span>Browse…</span>
+            </button>
           </div>
-        </div>
+          <div class="install-bar-hint">${icon("info", 13)}<span>Accepts a URL, owner/repo or addon name — or drop a .zip anywhere on this bar.</span></div>
+          <input type="file" class="file-input" accept=".zip,application/zip,application/x-zip-compressed" hidden />
+        </section>
 
         ${curatedHtml}
 
-        ${
-          result
-            ? `<div class="catalog-chips" role="group" aria-label="Filter results">
-                ${FILTERS.map(
-                  (f) => `
-                  <button class="chip-btn${provider === f.value ? " active" : ""}" aria-pressed="${provider === f.value}" data-filter="${f.value}">
-                    ${f.label}
-                    ${f.value === "all" ? `<span class="chip-count">${results.length}</span>` : `<span class="chip-count">${results.filter((r) => r.provider === f.value).length}</span>`}
-                  </button>`,
-                ).join("")}
-                ${
-                  familyNorm
-                    ? `<button class="chip-btn${compatOnly ? " active" : ""}" data-compat-toggle aria-pressed="${compatOnly}" title="Hide results built for other game versions">
-                        ${icon("shield", 13)}<span>Compatible with ${escapeHtml(familyNorm)}${compatOnly ? `<span class="chip-count">(${compatCount})</span>` : ""}</span>
-                      </button>`
-                    : ""
-                }
-              </div>`
-            : ""
-        }
+        <div class="search-box">
+          <span class="search-icon">${icon("search", 16)}</span>
+          <input class="text-input search-input" type="text" placeholder="Search addons by name, author or summary…"
+            spellcheck="false" autocomplete="off" value="${escapeAttr(query)}" aria-label="Search addon catalog" data-search />
+          ${query ? `<button class="search-clear" data-search-clear aria-label="Clear search">${icon("x", 14)}</button>` : ""}
+        </div>
 
-        ${
-          errors.length
-            ? `<div class="error-box" role="alert">
-                <span class="error-box-head">${icon("alert", 15)}<span>${errors.length} problem${errors.length === 1 ? "" : "s"} while searching</span></span>
-                <ul>${errors.map((e) => `<li>${escapeHtml(e)}</li>`).join("")}</ul>
-              </div>`
-            : ""
-        }
+        <div class="filter-chips" role="group" aria-label="Filter by provider">${chipsHtml}</div>
 
-        ${
-          installResult
-            ? `<div class="catalog-result" role="status">
-                <div class="result-summary">
-                  <span class="result-summary-icon tile-ok">${icon("check-circle", 16)}</span>
-                  <span class="result-summary-text">
-                    <b>${installResult.installed} installed</b>
-                    ${installResult.replaced ? ` · ${installResult.replaced} replaced` : ""}
-                    ${installResult.skipped ? ` · ${installResult.skipped} skipped` : ""}
-                    ${installResult.errors.length ? ` · ${installResult.errors.length} errors` : ""}
-                  </span>
-                </div>
-                ${
-                  installResult.errors.length
-                    ? `<ul class="result-errors">${installResult.errors
-                        .map((e) => `<li>${icon("x-circle", 14)}<span>${escapeHtml(e)}</span></li>`)
-                        .join("")}</ul>`
-                    : ""
-                }
-                <div class="result-actions">
-                  <button class="btn btn-primary" data-rescan>${icon("refresh", 16)}<span>Scan addons now</span></button>
-                  <span class="result-hint">New addons appear in the scan list.</span>
-                </div>
-              </div>`
-            : ""
-        }
+        ${errorBox}
 
-        ${
-          wagoResult
-            ? `<div class="catalog-result" role="status">
-                <div class="result-summary">
-                  <span class="result-summary-icon tile-ok">${icon("check-circle", 16)}</span>
-                  <span class="result-summary-text">
-                    <b>Import saved</b>
-                    <span class="muted">${escapeHtml(wagoResult.name)} · ${formatBytes(wagoResult.bytes)}</span>
-                  </span>
-                </div>
-                <div class="result-actions">
-                  <span class="result-hint mono">${escapeHtml(wagoResult.path)}</span>
-                  <span class="result-hint">Import it in-game via WeakAuras → Import.</span>
-                </div>
-              </div>`
-            : ""
-        }
+        ${resultsHtml}
 
-        ${
-          !result
-            ? emptyCard(
-                "search",
-                "Search the addon catalog",
-                "Find addons across GitHub, CurseForge, WowInterface and Tukui, or paste a URL / owner-repo to install directly.",
-                "",
-              )
-            : searching
-              ? `<div class="list-loading"><span class="spinner spinner-lg"></span><span>Searching…</span></div>`
-              : shown.length === 0
-                ? emptyCard(
-                    "search",
-                    compatOnly && filtered.length > 0
-                      ? `No addons compatible with ${escapeHtml(familyNorm)}`
-                      : query
-                        ? `No addons found for “${escapeHtml(query)}”`
-                        : "No addons found",
-                    compatOnly && filtered.length > 0
-                      ? "Try disabling the compatibility filter."
-                      : "Try a different query or provider filter.",
-                    "",
-                  )
-                : `<div class="catalog-rows">${shown.map(renderRow).join("")}</div>`
-        }
+        ${installPanel}
 
-        ${infoPanelHtml()}
-        ${sourcesSectionHtml()}
+        ${wagoPanel}
+
+        ${infoPanel}
+
+        ${wagoSectionHtml()}
       </div>`;
 
-    const searchInput = el.querySelector<HTMLInputElement>("[data-search]")!;
-    const sourceInput = el.querySelector<HTMLInputElement>("[data-source]")!;
-    const installBar = el.querySelector<HTMLElement>("[data-install-bar]")!;
-    const fileInput = el.querySelector<HTMLInputElement>(".file-input")!;
+    bind(el, { shown, featured });
+  };
 
-    searchInput.addEventListener("input", () => {
+  const resultRow = (r: CatalogEntry, i: number): string => {
+    const rowBusy = installing && busySource === r.id;
+    return `
+    <div class="catalog-row">
+      <div class="catalog-row-info">
+        <div class="catalog-row-name-line">
+          <span class="catalog-row-name">${escapeHtml(r.name)}</span>
+          ${r.game_version ? `<span class="game-badge tnum">${escapeHtml(r.game_version)}</span>` : ""}
+        </div>
+        <span class="catalog-row-author">${escapeHtml(r.author)}</span>
+        <span class="catalog-row-summary">${escapeHtml(r.summary)}</span>
+        <span class="catalog-row-id mono">${escapeHtml(r.id)}</span>
+      </div>
+      <div class="catalog-row-meta">
+        <span class="catalog-ver mono tnum">v${escapeHtml(r.latest_version || "n/a")}</span>
+        ${providerChip(r.provider, sourceTooltip(r.provider))}
+      </div>
+      <div class="catalog-row-actions">
+        <button class="btn-secondary btn-sm" data-info-row="${i}" ${infoLoading ? "disabled" : ""} title="Details for ${escapeAttr(r.name)}">
+          ${icon("info", 14)}<span>Info</span>
+        </button>
+        ${
+          r.provider === "wago"
+            ? `<button class="btn-secondary btn-sm" data-save-import="${i}" ${saving ? "disabled" : ""} title="Save the import string for in-game import">
+                ${saving && savingId === r.id ? `<span class="spinner"></span>` : icon("save", 14)}<span>Save import</span>
+              </button>`
+            : `<button class="btn-primary btn-sm" data-install-row="${i}" ${installing ? "disabled" : ""}>
+                ${rowBusy ? `<span class="spinner"></span>` : icon("download", 14)}<span>${rowBusy ? "Installing…" : "Install"}</span>
+              </button>`
+        }
+      </div>
+    </div>`;
+  };
+
+  const resultPanel = (res: InstallResult): string => {
+    const hasErrors = res.errors.length > 0;
+    const group = (label: string, names: string[], cls: string): string =>
+      names.length === 0
+        ? ""
+        : `
+        <div class="result-group">
+          <span class="result-group-label">${label}</span>
+          <div class="chip-list">${names.map((n) => `<span class="chip ${cls}">${escapeHtml(n)}</span>`).join("")}</div>
+        </div>`;
+    const summary = [
+      res.installed.length ? `${res.installed.length} installed` : "",
+      res.replaced.length ? `${res.replaced.length} replaced` : "",
+      res.skipped.length ? `${res.skipped.length} skipped` : "",
+      hasErrors ? `${res.errors.length} error${res.errors.length === 1 ? "" : "s"}` : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    return `
+    <section class="result-panel" role="status" aria-label="Install results">
+      <div class="result-panel-head">
+        <span class="result-panel-icon ${hasErrors ? "is-error" : "is-ok"}">${icon(hasErrors ? "alert" : "check-circle", 18)}</span>
+        <div class="result-panel-title">
+          <b>${hasErrors ? "Install finished with errors" : "Install complete"}</b>
+          <span class="result-panel-sub">${summary || "Nothing was installed."}</span>
+        </div>
+        <button class="icon-btn" data-result-dismiss aria-label="Dismiss result">${icon("x", 15)}</button>
+      </div>
+      <div class="result-groups">
+        ${group("Installed", res.installed, "chip-dot chip-ok")}
+        ${group("Replaced", res.replaced, "chip-dot chip-warn")}
+        ${group("Skipped", res.skipped, "chip-dot chip-skip")}
+      </div>
+      ${hasErrors ? `<ul class="result-errors">${res.errors.map((e) => `<li class="error-row"><span class="chip chip-error">Error</span><span>${escapeHtml(e)}</span></li>`).join("")}</ul>` : ""}
+    </section>`;
+  };
+
+  const wagoResultPanel = (res: WagoImportResult): string => `
+    <section class="result-panel" role="status" aria-label="Import saved">
+      <div class="result-panel-head">
+        <span class="result-panel-icon is-ok">${icon("check-circle", 18)}</span>
+        <div class="result-panel-title">
+          <b>Import saved</b>
+          <span class="result-panel-sub mono">${escapeHtml(res.name)} · ${formatBytes(res.bytes)} · ${escapeHtml(res.path)}</span>
+        </div>
+        <button class="icon-btn" data-wago-dismiss aria-label="Dismiss result">${icon("x", 15)}</button>
+      </div>
+      <p class="result-hint">${escapeHtml(res.applied_hint)}</p>
+    </section>`;
+
+  const infoPanelHtml = (): string => {
+    if (!info && !infoLoading && !infoErr) return "";
+    let head: string;
+    let body: string;
+    let installable = false;
+    let installId = "";
+    if (infoLoading) {
+      head = `<b>Looking up ${escapeHtml(infoArg)}…</b>`;
+      body = `<div class="list-loading"><span class="spinner"></span><span>Fetching details…</span></div>`;
+    } else if (infoErr) {
+      head = `<b>${escapeHtml(infoArg)}</b>`;
+      body = `<div class="error-box" role="alert"><span class="error-box-head">${icon("alert", 15)}<span>${escapeHtml(infoErr)}</span></span></div>`;
+    } else if (info && info.matches && info.matches.length > 0) {
+      head = `<b>“${escapeHtml(infoArg)}” is ambiguous</b>`;
+      body = `
+        <div class="match-list">
+          <p class="result-hint">More than one addon matches. Pick one to see its details:</p>
+          ${info.matches
+            .map(
+              (m, i) => `
+            <div class="match-row">
+              <div class="match-info">
+                <span class="match-name">${escapeHtml(m.name)}</span>
+                <span class="match-meta mono">${escapeHtml(m.id)}</span>
+              </div>
+              ${providerChip(m.provider)}
+              <button class="btn-primary btn-sm" data-info-match="${i}">${icon("info", 14)}<span>Details</span></button>
+            </div>`,
+            )
+            .join("")}
+        </div>`;
+    } else if (info) {
+      head = `<b>${escapeHtml(info.name || infoArg)}</b>${info.provider ? providerChip(info.provider) : ""}`;
+      body = infoDetails(info);
+      installId = info.id || info.name || infoArg;
+      installable = Boolean(installId);
+    } else {
+      return "";
+    }
+    return `
+    <section class="info-panel" role="region" aria-label="Addon details">
+      <div class="info-head">
+        <span class="info-icon">${icon("info", 18)}</span>
+        <div class="info-title">${head}</div>
+        <button class="icon-btn" data-info-close aria-label="Close details">${icon("x", 15)}</button>
+      </div>
+      ${body}
+      ${installable ? `
+      <div class="info-actions">
+        <button class="btn-primary btn-sm" data-info-install ${installing ? "disabled" : ""}>
+          ${installing && busySource === installId ? `<span class="spinner"></span>` : icon("download", 14)}<span>Install</span>
+        </button>
+        <button class="btn-secondary btn-sm" data-info-close>${icon("x", 14)}<span>Close</span></button>
+      </div>` : ""}
+    </section>`;
+  };
+
+  const infoDetails = (r: InfoResult): string => {
+    const homepage = (r.homepage ?? "").trim();
+    const notes = (r.release_notes ?? "").trim();
+    const kv = (label: string, value: string, mono = false): string => `
+      <div class="info-kv">
+        <dt>${label}</dt>
+        <dd class="${mono ? "mono tnum" : ""}">${value || "n/a"}</dd>
+      </div>`;
+    return `
+      <dl class="info-grid">
+        ${kv("Author", escapeHtml(r.author || ""))}
+        ${kv("Provider", providerChip(r.provider))}
+        ${kv("Latest version", escapeHtml(r.latest_version || ""), true)}
+        ${kv("Game version", escapeHtml(r.game_version || ""))}
+        ${kv("Updated", escapeHtml(formatDate(r.updated_at || "")))}
+        ${kv("ID", escapeHtml(r.id || ""), true)}
+        ${kv("Homepage", homepage ? `<a href="${escapeAttr(homepage)}" target="_blank" rel="noreferrer">${escapeHtml(homepage)}</a>` : "")}
+      </dl>
+      <p class="info-summary">${escapeHtml(r.summary || "No description available.")}</p>
+      ${notes ? `<div class="info-notes"><span class="info-notes-label">Release notes</span>${notes.split("\n").map((l) => (l ? `<p>${escapeHtml(l)}</p>` : "<p>&nbsp;</p>")).join("")}</div>` : ""}`;
+  };
+
+  const wagoSectionHtml = (): string => `
+    <section class="wago-card card" aria-label="Wago imports">
+      <div class="wago-head">
+        <span class="wago-icon">${icon("save", 18)}</span>
+        <div class="wago-head-text">
+          <h3 class="wago-title">Wago imports</h3>
+          <p class="wago-sub">Save a WeakAuras or Plater import string from Wago into your SavedVariables, then import it in-game.</p>
+        </div>
+      </div>
+      <div class="wago-form">
+        <input class="text-input wago-input" data-wago type="text" placeholder="Wago id — e.g. aNVtPkzRn3, or pick one from the search results above"
+          spellcheck="false" autocomplete="off" value="${escapeAttr(wagoArg)}" aria-label="Wago import id" />
+        <button class="btn-secondary" data-wago-save ${saving ? "disabled" : ""}>
+          ${saving && savingId === (wagoArg.trim() || null) ? `<span class="spinner"></span>` : icon("save", 15)}<span>Save import</span>
+        </button>
+      </div>
+      ${wagoResult ? `<div class="wago-result">${icon("check-circle", 15)}<span><b>${escapeHtml(wagoResult.name)}</b> · ${formatBytes(wagoResult.bytes)} · <span class="mono">${escapeHtml(wagoResult.path)}</span></span></div>` : ""}
+    </section>`;
+
+  const bind = (
+    root: HTMLElement,
+    ctx: { shown: CatalogEntry[]; featured: CuratedAddon[] },
+  ): void => {
+    // Every element below is rendered by this view's own template.
+    const searchInput = root.querySelector<HTMLInputElement>("[data-search]")!;
+    const sourceInput = root.querySelector<HTMLInputElement>("[data-source]")!;
+    const fileInput = root.querySelector<HTMLInputElement>(".file-input")!;
+    const bar = root.querySelector<HTMLElement>("[data-bar]")!;
+    const wagoInput = root.querySelector<HTMLInputElement>("[data-wago]")!;
+
+    searchInput?.addEventListener("input", () => {
       query = searchInput.value;
       scheduleSearch();
       rerender();
     });
-    searchInput.addEventListener("keydown", (e) => {
+    searchInput?.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
-        window.clearTimeout(timer);
+        window.clearTimeout(debounceTimer);
         void doSearch(searchInput.value);
-      }
-      if (e.key === "Escape" && query) {
-        query = "";
-        window.clearTimeout(timer);
-        result = null;
-        rerender();
+      } else if (e.key === "Escape" && query) {
+        e.preventDefault();
+        clearSearch();
       }
     });
-    el.querySelector(".search-clear")?.addEventListener("click", () => {
-      query = "";
-      window.clearTimeout(timer);
-      result = null;
-      rerender();
-    });
-    sourceInput.addEventListener("keydown", (e) => {
+    root.querySelector("[data-search-clear]")?.addEventListener("click", clearSearch);
+
+    sourceInput?.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
         submitSource();
-      }
-      if (e.key === "Escape" && sourceInput.value) {
+      } else if (e.key === "Escape" && sourceInput.value) {
         sourceInput.value = "";
       }
     });
-    el.querySelector("[data-install]")?.addEventListener("click", submitSource);
-    el.querySelector("[data-browse]")?.addEventListener("click", async () => {
+    root.querySelector("[data-install]")?.addEventListener("click", submitSource);
+    root.querySelector("[data-browse]")?.addEventListener("click", async () => {
       if (installing) return;
-      // Prefer the Wails v2 native dialog (returns a real filesystem path);
-      // fall back to the HTML file input when not running under Wails.
       const nativePath = await pickZipPath();
       if (nativePath) void installZipPath(nativePath);
-      else fileInput.click();
+      else fileInput?.click();
     });
-    fileInput.addEventListener("change", () => {
+    fileInput?.addEventListener("change", () => {
       const f = fileInput.files?.[0];
       if (f) void installZipFile(f);
       fileInput.value = "";
     });
-    installBar.addEventListener("dragover", (e) => {
+    bar?.addEventListener("dragover", (e) => {
       e.preventDefault();
-      installBar.classList.add("dragover");
+      bar.classList.add("dragover");
     });
-    installBar.addEventListener("dragleave", () => installBar.classList.remove("dragover"));
-    installBar.addEventListener("drop", (e) => {
+    bar?.addEventListener("dragleave", () => bar.classList.remove("dragover"));
+    bar?.addEventListener("drop", (e) => {
       e.preventDefault();
-      installBar.classList.remove("dragover");
+      bar.classList.remove("dragover");
       const f = e.dataTransfer?.files?.[0];
       if (f) void installZipFile(f);
     });
-    el.querySelector("[data-rescan]")?.addEventListener("click", () => {
-      void actions.scan().then(() => actions.go("scan"));
-    });
-    el.querySelectorAll<HTMLElement>("[data-filter]").forEach((chip) => {
+
+    root.querySelectorAll<HTMLElement>("[data-filter]").forEach((chip) => {
       chip.addEventListener("click", () => {
         provider = (chip.dataset.filter as "all" | Provider) ?? "all";
         rerender();
       });
     });
-    el.querySelectorAll<HTMLElement>("[data-install-row]").forEach((btn) => {
-      const entry = filtered[Number(btn.dataset.installRow)];
+    root.querySelector("[data-compat-toggle]")?.addEventListener("click", () => {
+      compatOnly = !compatOnly;
+      rerender();
+    });
+    root.querySelectorAll<HTMLElement>("[data-install-row]").forEach((btn) => {
+      const entry = ctx.shown[Number(btn.dataset.installRow)];
+      if (!entry) return;
       btn.addEventListener("click", () => {
         pendingFocus = `install:${btn.dataset.installRow}`;
         void installSource(entry.id, entry.name);
       });
     });
-    el.querySelectorAll<HTMLElement>("[data-save-import]").forEach((btn) => {
-      const entry = filtered[Number(btn.dataset.saveImport)];
-      btn.addEventListener("click", () => {
-        pendingFocus = `save:${btn.dataset.saveImport}`;
-        void saveImport(entry);
-      });
-    });
-    el.querySelector("[data-compat-toggle]")?.addEventListener("click", () => {
-      compatOnly = !compatOnly;
-      rerender();
-    });
-    el.querySelectorAll<HTMLElement>("[data-curated-install]").forEach((btn) => {
-      const addon = curated?.addons[Number(btn.dataset.curatedInstall)];
-      if (!addon) return;
-      btn.addEventListener("click", () => {
-        pendingFocus = `curated:${btn.dataset.curatedInstall}`;
-        void installCurated(addon);
-      });
-    });
-    el.querySelectorAll<HTMLElement>("[data-info-row]").forEach((btn) => {
-      const entry = filtered[Number(btn.dataset.infoRow)];
+    root.querySelectorAll<HTMLElement>("[data-info-row]").forEach((btn) => {
+      const entry = ctx.shown[Number(btn.dataset.infoRow)];
       if (!entry) return;
       btn.addEventListener("click", () => {
         pendingFocus = `info:${btn.dataset.infoRow}`;
         void fetchInfo(entry.id || entry.name);
       });
     });
-    el.querySelectorAll<HTMLElement>("[data-info-match]").forEach((btn) => {
-      const m = infoMatchesOf(info)[Number(btn.dataset.infoMatch)];
+    root.querySelectorAll<HTMLElement>("[data-save-import]").forEach((btn) => {
+      const entry = ctx.shown[Number(btn.dataset.saveImport)];
+      if (!entry) return;
+      btn.addEventListener("click", () => {
+        pendingFocus = `save:${btn.dataset.saveImport}`;
+        void saveImport(entry.id);
+      });
+    });
+    root.querySelectorAll<HTMLElement>("[data-curated-install]").forEach((btn) => {
+      const a = ctx.featured[Number(btn.dataset.curatedInstall)];
+      if (!a) return;
+      btn.addEventListener("click", () => {
+        pendingFocus = "curated-install";
+        void installSource(a.source, a.name);
+      });
+    });
+    root.querySelectorAll<HTMLElement>("[data-info-match]").forEach((btn) => {
+      const m = info?.matches?.[Number(btn.dataset.infoMatch)];
       if (!m) return;
       btn.addEventListener("click", () => {
-        pendingFocus = `info-match:${btn.dataset.infoMatch}`;
+        pendingFocus = `match:${btn.dataset.infoMatch}`;
         const arg = m.id || m.name || "";
         if (!arg) {
           toast({ type: "error", title: "Cannot look up match", message: "This match has no id or name to look up." });
@@ -757,194 +860,53 @@ export function mountCatalog(
         void fetchInfo(arg);
       });
     });
-    el.querySelector("[data-info-close]")?.addEventListener("click", () => {
+    root.querySelector("[data-info-close]")?.addEventListener("click", () => {
       pendingFocus = null;
       closeInfo();
     });
-    el.querySelector("[data-sources-toggle]")?.addEventListener("click", () => {
-      pendingFocus = "sources";
-      toggleSources();
+    root.querySelector("[data-info-install]")?.addEventListener("click", () => {
+      if (!info) return;
+      pendingFocus = "info-install";
+      void installSource(info.id || info.name || infoArg, info.name || infoArg);
     });
-    el.querySelector("[data-go-setup]")?.addEventListener("click", () => actions.go("setup"));
+    root.querySelector("[data-result-dismiss]")?.addEventListener("click", () => {
+      installResult = null;
+      rerender();
+    });
+    root.querySelector("[data-wago-dismiss]")?.addEventListener("click", () => {
+      wagoResult = null;
+      rerender();
+    });
+    wagoInput?.addEventListener("input", () => {
+      wagoArg = wagoInput.value;
+    });
+    wagoInput?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        void saveImport(wagoInput.value);
+      }
+    });
+    root.querySelector("[data-wago-save]")?.addEventListener("click", () => {
+      void saveImport(wagoInput?.value ?? "");
+    });
 
     function submitSource(): void {
-      const src = sourceInput.value.trim();
-      if (!src) return;
+      const src = sourceInput?.value.trim() ?? "";
+      if (!src || installing) return;
+      barSource = src;
       sourceInput.value = "";
       void installSource(src, displayNameFromSource(src));
     }
   };
 
-  const renderRow = (r: CatalogEntry, i: number): string => `
-    <div class="catalog-row">
-      <div class="catalog-info">
-        <div class="catalog-name-line">
-          <span class="catalog-name">${escapeHtml(r.name)}</span>
-          ${r.game_version ? `<span class="game-badge">${escapeHtml(r.game_version)}</span>` : ""}
-        </div>
-        <span class="catalog-author">${escapeHtml(r.author)}</span>
-        <span class="catalog-summary">${escapeHtml(r.summary)}</span>
-      </div>
-      <div class="catalog-meta">
-        <span class="catalog-ver mono">v${escapeHtml(r.latest_version || "n/a")}</span>
-        ${providerChip(r.provider)}
-      </div>
-      <div class="catalog-action">
-        <button class="btn btn-outline btn-sm" data-info-row="${i}" ${infoLoading ? "disabled" : ""}
-          title="Show catalog details for ${escapeAttr(r.name)}">
-          ${icon("info", 14)}<span>Info</span>
-        </button>
-        ${
-          r.provider === "wago"
-            ? `<button class="btn btn-outline btn-sm" data-save-import="${i}" ${saving ? "disabled" : ""} title="Save the import string for in-game import">
-                ${saving ? `<span class="spinner"></span>` : icon("download", 14)}<span>Save import</span>
-              </button>`
-            : `<button class="btn btn-primary btn-sm" data-install-row="${i}" ${installing ? "disabled" : ""}>
-                ${icon("package", 14)}<span>Install</span>
-              </button>`
-        }
-      </div>
-    </div>`;
-
-  const infoMatchesOf = (r: InfoResult | null): InfoMatch[] =>
-    r && Array.isArray(r.matches) ? (r.matches as unknown as InfoMatch[]) : [];
-
-  const infoKv = (label: string, valueHtml: string, mono = false): string => `
-    <div class="issue-item">
-      <span class="issue-sugg" style="flex:none; width:120px">${label}</span>
-      <span class="issue-msg${mono ? " mono" : ""}">${valueHtml}</span>
-    </div>`;
-
-  const renderInfoDetails = (r: InfoResult): string => {
-    const homepage = (r.homepage ?? "").trim();
-    const notes = (r.release_notes ?? "").trim();
-    return `
-      <div class="issue-list">
-        ${infoKv("Provider", r.provider ? providerChip(r.provider) : "n/a")}
-        ${infoKv("ID", escapeHtml(r.id || "n/a"), true)}
-        ${infoKv("Author", escapeHtml(r.author || "n/a"))}
-        ${infoKv("Latest version", escapeHtml(r.latest_version || "n/a"), true)}
-        ${infoKv("Game version", escapeHtml(r.game_version || "n/a"))}
-        ${infoKv("Updated", escapeHtml(formatDate(r.updated_at || "") || "n/a"))}
-        ${
-          homepage
-            ? `<div class="issue-item">
-                <span class="issue-sugg" style="flex:none; width:120px">Homepage</span>
-                <span class="issue-msg"><a href="${escapeAttr(homepage)}" target="_blank" rel="noreferrer">${escapeHtml(homepage)}</a></span>
-              </div>`
-            : infoKv("Homepage", "n/a")
-        }
-        ${infoKv("Summary", escapeHtml(r.summary || "n/a"))}
-        ${
-          notes
-            ? `<div class="issue-item">
-                <span class="issue-sugg" style="flex:none; width:120px">Release notes</span>
-                <span class="issue-msg">${notes
-                  .split("\n")
-                  .map((l) => (l ? `<div>${escapeHtml(l)}</div>` : "<div>&nbsp;</div>"))
-                  .join("")}</span>
-              </div>`
-            : ""
-        }
-      </div>`;
-  };
-
-  const renderInfoMatchRow = (m: InfoMatch, i: number): string => `
-    <div class="catalog-row">
-      <div class="catalog-info">
-        <div class="catalog-name-line">
-          <span class="catalog-name">${escapeHtml(m.name || "n/a")}</span>
-        </div>
-        <span class="catalog-summary mono">${escapeHtml(m.id || "")}</span>
-      </div>
-      <div class="catalog-meta">${m.provider ? providerChip(m.provider) : ""}</div>
-      <div class="catalog-action">
-        <button class="btn btn-primary btn-sm" data-info-match="${i}" ${infoLoading ? "disabled" : ""}>
-          ${icon("info", 14)}<span>Details</span>
-        </button>
-      </div>
-    </div>`;
-
-  const infoPanelHtml = (): string => {
-    if (!info && !infoLoading && !infoErr) return "";
-    let head: string;
-    let body: string;
-    if (infoLoading) {
-      head = `<b>Looking up ${escapeHtml(infoArg)}…</b>`;
-      body = `<div class="list-loading"><span class="spinner"></span><span>Fetching details…</span></div>`;
-    } else if (infoErr) {
-      head = `<b>${escapeHtml(infoArg)}</b>`;
-      body = `<div class="managed-error" role="alert">${icon("alert", 14)}<span>${escapeHtml(infoErr)}</span></div>`;
-    } else if (info && infoMatchesOf(info).length > 0) {
-      head = `<b>“${escapeHtml(infoArg)}” is ambiguous</b>`;
-      body = `
-        <div class="catalog-info-body">
-          <p class="result-hint">More than one addon matches. Choose one to see its details:</p>
-          <div class="catalog-rows">${infoMatchesOf(info).map(renderInfoMatchRow).join("")}</div>
-        </div>`;
-    } else if (info) {
-      head = `<b>${escapeHtml(info.name || infoArg)}</b>${info.provider ? providerChip(info.provider) : ""}`;
-      body = renderInfoDetails(info);
-    } else {
-      return "";
-    }
-    return `
-      <section class="catalog-result" role="region" aria-label="Addon details">
-        <div class="result-summary">
-          <span class="result-summary-icon tile-ok">${icon("info", 16)}</span>
-          <span class="result-summary-text">${head}</span>
-        </div>
-        ${body}
-        <div class="result-actions">
-          <button class="btn btn-outline btn-sm" data-info-close>${icon("x", 14)}<span>Close</span></button>
-        </div>
-      </section>`;
-  };
-
-  const sourcesSectionHtml = (): string => {
-    const rows = sourcesLoading
-      ? `<div class="list-loading"><span class="spinner"></span><span>Loading providers…</span></div>`
-      : sourcesErr
-        ? `<div class="managed-error" role="alert">${icon("alert", 14)}<span>${escapeHtml(sourcesErr)}</span></div>`
-        : sources === null
-          ? ""
-          : `<ul class="issue-list">
-              ${sources
-                .map(
-                  (s) => `
-                <li class="issue-item">
-                  <span class="issue-text">
-                    <span class="issue-msg">${escapeHtml(s.name)}</span>
-                    <span class="issue-sugg">${escapeHtml(s.description)}</span>
-                  </span>
-                </li>`,
-                )
-                .join("")}
-            </ul>`;
-    return `
-      <section class="catalog-sources" aria-label="Catalog sources" style="margin:0 20px 12px">
-        <button class="btn btn-ghost btn-sm" data-sources-toggle aria-expanded="${sourcesOpen}" aria-controls="catalog-sources-body">
-          ${icon(sourcesOpen ? "chevron-down" : "chevron-right", 14)}
-          <span>Sources</span>
-          ${sources ? `<span class="muted">${sources.length} provider${sources.length === 1 ? "" : "s"}</span>` : ""}
-        </button>
-        ${sourcesOpen ? `<div class="catalog-sources-body" id="catalog-sources-body">${rows}</div>` : ""}
-      </section>`;
-  };
-
   render();
   void loadCurated();
-
-  return {
-    refresh: () => {
-      void loadCurated();
-    },
-  };
+  void loadSources();
 }
 
-function providerChip(provider: string): string {
-  const label = PROVIDER_LABEL[provider] ?? provider;
-  return `<span class="provider-chip prov-${escapeAttr(provider)}" title="${escapeAttr(PROVIDER_LABEL[provider] ?? provider)}">${escapeHtml(label)}</span>`;
+function providerChip(provider: string, tooltip?: string): string {
+  const label = PROVIDER_LABEL[provider as Provider] ?? provider;
+  return `<span class="provider-chip" title="${escapeAttr(tooltip ?? label)}">${escapeHtml(label)}</span>`;
 }
 
 function displayNameFromSource(src: string): string {
@@ -962,13 +924,36 @@ function formatDate(iso: string): string {
   );
 }
 
-function emptyCard(glyph: IconName, title: string, sub: string, cta: string): string {
-  return `<div class="empty">
-    <span class="empty-icon">${icon(glyph, 28)}</span>
-    <h2 class="empty-title">${title}</h2>
-    <p class="empty-sub">${sub}</p>
-    <div class="empty-actions">${cta}</div>
-  </div>`;
+function emptyState(glyph: IconName, title: string, body: string): string {
+  return `
+    <div class="empty-state">
+      <span class="empty-glyph">${icon(glyph, 30)}</span>
+      <h2 class="empty-title">${escapeHtml(title)}</h2>
+      <p class="empty-body">${escapeHtml(body)}</p>
+    </div>`;
+}
+
+// Wails v2 exposes the native file dialog on the JS runtime; returns the
+// chosen path or null when unavailable or cancelled.
+function pickZipPath(): Promise<string | null> {
+  const rt = (window as unknown as {
+    runtime?: { OpenFileDialog?: (opts: unknown) => Promise<string | null> };
+  }).runtime;
+  if (!rt?.OpenFileDialog) return Promise.resolve(null);
+  return rt
+    .OpenFileDialog({
+      filters: [{ displayName: "ZIP archives", pattern: "*.zip" }],
+    })
+    .then((p) => p || null)
+    .catch(() => null);
+}
+
+// Resolve the installable path for a picked/dropped File. Wails v2 patches
+// File objects with a real `path` property in some versions; browsers never
+// do. Mock mode accepts the bare name so browser demos keep working.
+function zipPathOf(file: File): string {
+  const wailsFile = file as File & { path?: string };
+  return wailsFile.path || (mockActive ? file.name : "");
 }
 
 function errText(err: unknown, fallback?: string): string {

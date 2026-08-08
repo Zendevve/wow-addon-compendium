@@ -1,0 +1,840 @@
+/* Catalog view — search five providers, install bar, curated set, Wago
+   imports. Owned by views/catalog.ts. References only tokens from
+   tokens.css and named components from components.css; new states are
+   view-local components below. */
+
+.catalog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+}
+
+/* ---- page head (compact — the empty state is the poster here) ---- */
+
+.catalog-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  max-width: 640px;
+}
+
+.catalog-head-title {
+  font-family: var(--font-display);
+  font-size: var(--title);
+  font-weight: 500;
+  line-height: var(--title-lh);
+  letter-spacing: var(--title-ls);
+}
+
+.catalog-head-sub {
+  color: var(--ink-muted);
+  font-size: var(--body);
+  line-height: var(--body-lh);
+}
+
+/* ---- install bar: the single install surface, also the ZIP drop zone ---- */
+
+.install-bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  background: var(--surface-2);
+  border-radius: var(--r-xl);
+  transition: box-shadow 140ms ease;
+}
+
+.install-bar.dragover {
+  box-shadow: var(--ring-focus);
+}
+
+.install-bar-main {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.install-bar-icon {
+  color: var(--ink-faint);
+  flex: none;
+}
+
+.install-bar-input {
+  flex: 1 1 240px;
+}
+
+.install-bar-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-faint);
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+}
+
+.install-bar-hint svg {
+  color: var(--ink-disabled);
+  flex: none;
+}
+
+/* ---- spinner ---- */
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--hairline-strong);
+  border-top-color: var(--ink-muted);
+  animation: spin 700ms linear infinite;
+  flex: none;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---- search ---- */
+
+.search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.search-icon {
+  position: absolute;
+  left: 14px;
+  color: var(--ink-faint);
+  pointer-events: none;
+}
+
+.search-input {
+  padding-left: 40px;
+  padding-right: 40px;
+}
+
+.search-clear {
+  position: absolute;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-full);
+  color: var(--ink-faint);
+}
+
+.search-clear:hover {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+
+/* ---- provider filter chips (tooltips carry the Sources() caveats) ---- */
+
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  align-items: center;
+}
+
+.chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-pill);
+  background: var(--surface-1);
+  color: var(--ink-muted);
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  line-height: var(--caption-lh);
+  letter-spacing: var(--caption-ls);
+  white-space: nowrap;
+}
+
+.chip-btn:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.chip-btn.active {
+  background: var(--surface-2);
+  color: var(--ink);
+  box-shadow: var(--ring-selected);
+}
+
+.chip-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  color: var(--ink-faint);
+  font-size: var(--micro);
+  line-height: 1;
+  font-feature-settings: "tnum";
+}
+
+.chip-btn.active .chip-count {
+  background: var(--canvas-inverse);
+  color: var(--on-primary);
+}
+
+/* ---- search error box (provider outages surface here, never suppressed) ---- */
+
+.error-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--error-dim);
+  border-radius: var(--r-lg);
+  color: var(--error);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+}
+
+.error-box-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-weight: 500;
+}
+
+.error-box ul {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  list-style: none;
+  padding-left: 26px;
+}
+
+.error-box li {
+  position: relative;
+}
+
+.error-box li::before {
+  content: "";
+  position: absolute;
+  left: -14px;
+  top: 8px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--error);
+}
+
+/* ---- result rows: cards on canvas, per-provider chip + per-row actions ---- */
+
+.catalog-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.catalog-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: var(--sp-4);
+  align-items: center;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--surface-1);
+  border-radius: var(--r-lg);
+  transition: background-color 120ms ease;
+}
+
+.catalog-row:hover {
+  background: var(--surface-2);
+}
+
+.catalog-row-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.catalog-row-name-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.catalog-row-name {
+  font-size: var(--body-sm);
+  font-weight: var(--body-sm-w);
+  line-height: var(--body-sm-lh);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.game-badge {
+  flex: none;
+  padding: 2px 7px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  color: var(--ink-faint);
+  font-size: var(--micro);
+  line-height: var(--micro-lh);
+  font-feature-settings: "tnum";
+}
+
+.catalog-row-author {
+  color: var(--ink-faint);
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+}
+
+.catalog-row-summary {
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.catalog-row-id {
+  color: var(--ink-faint);
+  font-size: var(--micro);
+  line-height: var(--micro-lh);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalog-row-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  flex: none;
+}
+
+.catalog-ver {
+  color: var(--ink-muted);
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+  font-feature-settings: "tnum";
+}
+
+.provider-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  color: var(--ink-muted);
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  line-height: var(--caption-lh);
+  letter-spacing: var(--caption-ls);
+  white-space: nowrap;
+}
+
+.catalog-row-actions {
+  display: flex;
+  gap: var(--sp-2);
+  flex: none;
+}
+
+/* Small pill buttons for row/panel actions (components.css CTAs at 32px). */
+.btn-sm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-pill);
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  line-height: var(--caption-lh);
+  letter-spacing: var(--caption-ls);
+  white-space: nowrap;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.btn-sm:active {
+  transform: scale(0.97);
+}
+
+.btn-sm:disabled {
+  opacity: 0.55;
+  cursor: default;
+  transform: none;
+}
+
+/* ---- install / wago result panels ---- */
+
+.result-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  background: var(--surface-2);
+  border-radius: var(--r-xl);
+  padding: var(--sp-5);
+}
+
+.result-panel-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+
+.result-panel-icon {
+  flex: none;
+  color: var(--ink-muted);
+}
+
+.result-panel-icon.is-ok {
+  color: var(--ok);
+}
+
+.result-panel-icon.is-error {
+  color: var(--error);
+}
+
+.result-panel-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.result-panel-title b {
+  font-size: var(--headline);
+  font-weight: var(--headline-w);
+  line-height: var(--headline-lh);
+  letter-spacing: var(--headline-ls);
+}
+
+.result-panel-sub {
+  color: var(--ink-muted);
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+}
+
+.result-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+}
+
+.result-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.result-group-label {
+  color: var(--ink-faint);
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  line-height: var(--caption-lh);
+  letter-spacing: var(--caption-ls);
+  text-transform: uppercase;
+}
+
+.chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Per-addon status dots on the shared .chip component. */
+.chip-dot::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.chip-ok::before {
+  background: var(--ok);
+}
+
+.chip-warn::before {
+  background: var(--warn);
+}
+
+.chip-skip::before {
+  background: var(--ink-disabled);
+}
+
+.chip-error {
+  background: var(--error-dim);
+  color: var(--error);
+}
+
+.result-errors {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.error-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+  color: var(--ink-muted);
+}
+
+.result-actions {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+}
+
+.result-hint {
+  color: var(--ink-faint);
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+}
+
+/* ---- curated band: ≤2 gradient spotlight cards ---- */
+
+.curated {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.curated-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.curated-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-family: var(--font-display);
+  font-size: var(--sub);
+  font-weight: 500;
+  line-height: var(--sub-lh);
+  letter-spacing: var(--sub-ls);
+}
+
+.curated-title svg {
+  color: var(--ink-muted);
+}
+
+.curated-sub {
+  color: var(--ink-muted);
+  font-size: var(--body);
+  line-height: var(--body-lh);
+}
+
+.curated-grid {
+  display: grid;
+  gap: var(--sp-5);
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.curated-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  min-height: 190px;
+}
+
+.curated-card-top {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.curated-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-top: auto;
+}
+
+.curated-source {
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+  color: rgba(247, 247, 246, 0.7);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.curated-more {
+  color: var(--ink-faint);
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+}
+
+/* ---- info panel ---- */
+
+.info-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  background: var(--surface-2);
+  border-radius: var(--r-xl);
+  padding: var(--sp-5);
+}
+
+.info-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+
+.info-icon {
+  flex: none;
+  color: var(--ink-muted);
+}
+
+.info-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.info-title b {
+  font-size: var(--headline);
+  font-weight: var(--headline-w);
+  line-height: var(--headline-lh);
+  letter-spacing: var(--headline-ls);
+}
+
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--sp-2) var(--sp-4);
+}
+
+.info-kv {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.info-kv dt {
+  color: var(--ink-faint);
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  line-height: var(--caption-lh);
+  letter-spacing: var(--caption-ls);
+  text-transform: uppercase;
+}
+
+.info-kv dd {
+  color: var(--ink);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.info-kv dd a {
+  color: var(--accent);
+}
+
+.info-summary {
+  color: var(--ink-muted);
+  font-size: var(--body);
+  line-height: var(--body-lh);
+}
+
+.info-notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--surface-1);
+  border-radius: var(--r-lg);
+}
+
+.info-notes-label {
+  color: var(--ink-faint);
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  line-height: var(--caption-lh);
+  letter-spacing: var(--caption-ls);
+  text-transform: uppercase;
+}
+
+.info-notes p {
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+}
+
+.info-actions {
+  display: flex;
+  gap: var(--sp-3);
+}
+
+/* ---- disambiguation picker ---- */
+
+.match-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.match-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--surface-1);
+  border-radius: var(--r-lg);
+}
+
+.match-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.match-name {
+  color: var(--ink);
+  font-size: var(--body-sm);
+  font-weight: var(--body-sm-w);
+  line-height: var(--body-sm-lh);
+}
+
+.match-meta {
+  color: var(--ink-faint);
+  font-size: var(--micro);
+  line-height: var(--micro-lh);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.match-row .provider-chip {
+  flex: none;
+}
+
+/* ---- wago import section ---- */
+
+.wago-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.wago-head {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-start;
+}
+
+.wago-icon {
+  flex: none;
+  color: var(--ink-muted);
+}
+
+.wago-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wago-title {
+  font-size: var(--headline);
+  font-weight: var(--headline-w);
+  line-height: var(--headline-lh);
+  letter-spacing: var(--headline-ls);
+}
+
+.wago-sub {
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+}
+
+.wago-form {
+  display: flex;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.wago-input {
+  flex: 1 1 260px;
+}
+
+.wago-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+}
+
+.wago-result svg {
+  color: var(--ok);
+  flex: none;
+}
+
+/* ---- loading ---- */
+
+.list-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  padding: var(--sp-6);
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+}
+
+/* ---- empty state glyph ---- */
+
+.empty-state .empty-glyph {
+  color: var(--ink-faint);
+}
+
+/* ---- narrow: stack result rows ---- */
+
+@media (max-width: 810px) {
+  .catalog-row {
+    grid-template-columns: 1fr;
+    gap: var(--sp-3);
+  }
+
+  .catalog-row-meta {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .catalog-row-actions {
+    justify-content: flex-end;
+  }
+}

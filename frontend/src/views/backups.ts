@@ -1,65 +1,80 @@
-// Backups view — full-addon snapshots. Create a snapshot, list the history
-// (id, created time, reason, folders) and restore one, gated behind a
-// destructive confirmation dialog. The Snapshot section below the list is
-// the offline export/check flow (CLI `snapshot export|check` parity).
+// Backups: full-addon snapshots. Create a snapshot, list the history
+// (newest first — id, created time, reason, folder count) and restore one
+// behind a destructive confirmation dialog. The offline snapshot export/check
+// flow is owned by the Updates view; this view only cross-links to it.
 
-import type { AppState, Actions } from "../app";
-import type {
-  BackupInfo,
-  ListBackupsResult,
-  UpdateEntry,
-  SnapshotResult,
-  SnapshotCheck,
-} from "../types";
+import type { View } from "../view";
+import type { BackupInfo, ListBackupsResult } from "../types";
 import { icon } from "../icons";
 import { service } from "../api";
-import { toast, type ToastOpts } from "../components/toast";
-import { confirmDialog } from "../components/dialog";
+import { toast } from "../toast";
+import { confirmDialog } from "../dialog";
+import "./backups.css";
 
-const PROVIDER_LABEL: Record<string, string> = {
-  github: "GH",
-  curseforge: "CF",
-  wowinterface: "WoWI",
-  tukui: "Tukui",
+export const view: View = {
+  id: "backups",
+  label: "Backups",
+  icon: "archive",
+  mount(host) {
+    mountBackups(host);
+  },
 };
 
-// Textareas have no stylesheet rules in this design system; the snapshot
-// boxes are themed through the tokens contract inline (canvas field on the
-// charcoal surface, hairline border, mono type).
-const JSON_TEXTAREA_STYLE =
-  "width:100%; box-sizing:border-box; resize:vertical; min-height:130px; " +
-  "background:var(--canvas); color:var(--ink); border:1px solid var(--hairline); " +
-  "border-radius:var(--r-md); padding:10px 12px; font-size:var(--body-sm); line-height:1.5;";
-
-export function mountBackups(
-  el: HTMLElement,
-  app: AppState,
-  actions: Actions,
-): { refresh: () => void } {
+function mountBackups(host: HTMLElement): void {
   let result: ListBackupsResult | null = null;
   let loading = false;
+  let loadError: string | null = null;
   let creating = false;
-  let restoring = false;
-  // --- snapshot export/check (CLI `snapshot export|check` parity) ----------
-  let snapshotOpen = false;
-  let exporting = false;
-  let snapshot: SnapshotResult | null = null;
-  let snapshotInput = "";
-  let checkingSnapshot = false;
-  let snapshotCheck: SnapshotCheck | null = null;
-  let snapshotCheckErr: string | null = null;
+  let restoringId = "";
+
+  // focus preservation: re-renders rebuild the DOM, so capture the focused
+  // control before a render and restore it after. pendingFocus survives
+  // async flows whose final re-render happens while the control is disabled.
+  let pendingFocus: string | null = null;
+
+  const focusKeyOf = (node: HTMLElement | null): string | null => {
+    if (!node) return null;
+    if (node.closest("[data-create]")) return "create";
+    const r = node.closest<HTMLElement>("[data-restore]");
+    if (r) return `restore:${r.dataset.restore}`;
+    return null;
+  };
+
+  const restoreFocus = (key: string): boolean => {
+    let target: HTMLElement | null = null;
+    if (key === "create") target = host.querySelector("[data-create]");
+    else if (key.startsWith("restore:"))
+      target = host.querySelector(`[data-restore="${key.slice("restore:".length)}"]`);
+    if (!target || (target as HTMLButtonElement).disabled) return false;
+    target.focus();
+    return true;
+  };
+
+  const rerender = (): void => {
+    const active = document.activeElement;
+    const key = pendingFocus ?? focusKeyOf(active instanceof HTMLElement ? active : null);
+    render();
+    if (!key) return;
+    if (restoreFocus(key)) pendingFocus = null;
+    else if (loading || creating || restoringId) {
+      // keep pendingFocus: the final re-render lands it on the re-enabled control
+    } else {
+      pendingFocus = null;
+    }
+  };
 
   const load = async (): Promise<void> => {
+    if (loading) return;
     loading = true;
+    loadError = null;
     rerender();
     try {
       result = await service.ListBackups();
     } catch (err) {
-      toast({
-        type: "error",
-        title: "Could not load backups",
-        message: errText(err),
-      });
+      loadError = errText(err);
+      if (result) {
+        toast({ type: "error", title: "Could not refresh backups", message: loadError });
+      }
     } finally {
       loading = false;
       rerender();
@@ -72,18 +87,10 @@ export function mountBackups(
     rerender();
     try {
       const res = await service.BackupNow();
-      toast({
-        type: "ok",
-        title: "Backup created",
-        message: `Snapshot ${res.id}`,
-      });
+      toast({ type: "ok", title: "Backup created", message: `Snapshot ${res.id}` });
       await load();
     } catch (err) {
-      toast({
-        type: "error",
-        title: "Backup failed",
-        message: errText(err),
-      });
+      toast({ type: "error", title: "Backup failed", message: errText(err) });
     } finally {
       creating = false;
       rerender();
@@ -91,386 +98,151 @@ export function mountBackups(
   };
 
   const restore = async (snap: BackupInfo): Promise<void> => {
-    if (restoring) return;
+    if (restoringId) return;
     const confirmed = await confirmDialog({
       title: `Restore snapshot ${snap.id}?`,
       message:
         "Every addon folder in this snapshot is replaced by its backed-up state. Current folders are snapshotted first.",
-      details: snap.folders.length
-        ? [`${snap.folders.length} folder${snap.folders.length === 1 ? "" : "s"}: ${snap.folders.join(", ")}`]
-        : undefined,
+      details: [`${snap.folders} addon folder${snap.folders === 1 ? "" : "s"} will be replaced`],
       confirmLabel: "Restore",
       danger: true,
     });
     if (!confirmed) return;
-    restoring = true;
+    restoringId = snap.id;
     rerender();
     try {
       const res = await service.RestoreBackup(snap.id, true);
       toast({
         type: "ok",
         title: "Backup restored",
-        message: `${res.restored.length} restored · ${res.skipped.length} skipped`,
+        message: `${res.restored.length} restored${res.skipped.length ? ` · ${res.skipped.length} skipped` : ""}`,
       });
       await load();
     } catch (err) {
-      toast({
-        type: "error",
-        title: "Restore failed",
-        message: errText(err),
-      });
+      toast({ type: "error", title: "Restore failed", message: errText(err) });
     } finally {
-      restoring = false;
+      restoringId = "";
       rerender();
     }
-  };
-
-  const exportSnapshot = async (): Promise<void> => {
-    if (exporting) return;
-    exporting = true;
-    rerender();
-    try {
-      snapshot = await service.ExportSnapshot();
-      toast({
-        type: "ok",
-        title: "Snapshot exported",
-        message: `${snapshot.addon_count} addon${snapshot.addon_count === 1 ? "" : "s"} frozen. Copy it, or save it as a file for later.`,
-      });
-    } catch (err) {
-      toast({ type: "error", title: "Snapshot export failed", message: errText(err) });
-    } finally {
-      exporting = false;
-      rerender();
-    }
-  };
-
-  const copySnapshot = async (): Promise<void> => {
-    if (!snapshot) return;
-    const text = snapshot.snapshot_json;
-    const okToast: ToastOpts = {
-      type: "ok",
-      title: "Snapshot copied",
-      message: "Paste it into the check box, or save it for later.",
-    };
-    try {
-      await navigator.clipboard.writeText(text);
-      toast(okToast);
-    } catch {
-      // Clipboard API unavailable (non-secure context / older webview) —
-      // fall back to select-and-execCommand on the read-only textarea.
-      const ta = el.querySelector<HTMLTextAreaElement>("[data-snapshot-json]");
-      if (!ta) {
-        toast({ type: "error", title: "Copy failed", message: "Select the JSON and press Ctrl+C." });
-        return;
-      }
-      ta.focus();
-      ta.select();
-      try {
-        if (document.execCommand("copy")) toast(okToast);
-        else toast({ type: "error", title: "Copy failed", message: "Select the JSON and press Ctrl+C." });
-      } catch {
-        toast({ type: "error", title: "Copy failed", message: "Select the JSON and press Ctrl+C." });
-      }
-    }
-  };
-
-  const checkSnapshot = async (): Promise<void> => {
-    if (checkingSnapshot) return;
-    const json = snapshotInput.trim();
-    if (!json) {
-      toast({ type: "warn", title: "Nothing to check", message: "Paste a snapshot JSON first." });
-      return;
-    }
-    checkingSnapshot = true;
-    snapshotCheck = null;
-    snapshotCheckErr = null;
-    rerender();
-    try {
-      snapshotCheck = await service.CheckSnapshot(json);
-    } catch (err) {
-      snapshotCheckErr = errText(err);
-      toast({ type: "error", title: "Snapshot check failed", message: errText(err) });
-    } finally {
-      checkingSnapshot = false;
-      rerender();
-    }
-  };
-
-  // --- focus preservation ------------------------------------------------
-  // Re-renders rebuild the view DOM, dropping keyboard focus to <body>.
-  // Capture the focused snapshot control before a re-render and restore focus
-  // to its replacement after. pendingFocus survives async flows (export /
-  // check) whose final re-render happens after the backend call, while the
-  // control is disabled.
-  let pendingFocus: string | null = null;
-
-  const focusKeyOf = (el: HTMLElement): string | null => {
-    if (el.closest("[data-snapshot-toggle]")) return "snapshot-toggle";
-    if (el.closest("[data-snapshot-export]")) return "snapshot-export";
-    if (el.closest("[data-snapshot-copy]")) return "snapshot-copy";
-    if (el.closest("[data-snapshot-check-input]")) return "snapshot-input";
-    if (el.closest("[data-snapshot-check]")) return "snapshot-check";
-    return null;
-  };
-
-  const restoreFocus = (key: string | null): boolean => {
-    if (!key) return false;
-    let target: HTMLElement | null = null;
-    if (key === "snapshot-toggle") target = el.querySelector<HTMLElement>("[data-snapshot-toggle]");
-    else if (key === "snapshot-export") target = el.querySelector<HTMLElement>("[data-snapshot-export]");
-    else if (key === "snapshot-copy") target = el.querySelector<HTMLElement>("[data-snapshot-copy]");
-    else if (key === "snapshot-input") target = el.querySelector<HTMLElement>("[data-snapshot-check-input]");
-    else if (key === "snapshot-check") target = el.querySelector<HTMLElement>("[data-snapshot-check]");
-    if (!target) return false;
-    if (target.hasAttribute("disabled")) return false;
-    target.focus();
-    return true;
-  };
-
-  const rerender = (): void => {
-    const active = document.activeElement;
-    const key = pendingFocus ?? (active instanceof HTMLElement ? focusKeyOf(active) : null);
-    render();
-    if (!key) return;
-    if (restoreFocus(key)) pendingFocus = null;
-    else if (!loading && !creating && !restoring && !exporting && !checkingSnapshot) pendingFocus = null;
   };
 
   const render = (): void => {
-    const busy = loading || creating || restoring;
-    const snaps = result?.snapshots ?? [];
+    // Newest first. Date.parse handles any RFC3339 offset; localeCompare is
+    // locale-collated and misorders mixed-offset timestamps, so never use it.
+    const ts = (iso: string): number => Date.parse(iso) || 0;
+    const snaps = result
+      ? [...result.snapshots].sort((a, b) => ts(b.created_at) - ts(a.created_at))
+      : [];
+    const busy = creating || Boolean(restoringId);
 
-    el.innerHTML = `
-      <div class="backups">
-        <div class="backups-toolbar">
-          <button class="btn btn-primary" data-create ${busy ? "disabled" : ""}>
-            ${creating ? `<span class="spinner"></span>` : icon("archive", 15)}
-            <span>${creating ? "Creating…" : "Create backup"}</span>
-          </button>
-          ${
-            result
-              ? `<span class="muted">${snaps.length} snapshot${snaps.length === 1 ? "" : "s"}</span>`
-              : ""
-          }
-          <span class="backups-hint muted">Snapshots are taken automatically before every change when auto-backup is on.</span>
+    host.innerHTML = `
+      <section class="view-page">
+        <div class="view-hero">
+          <h1 class="view-title">Backups</h1>
+          <p class="view-sub">Full-addon snapshots taken before every change — restore any point, or diff an offline snapshot.</p>
         </div>
 
-        ${
-          !result
-            ? `<div class="list-loading"><span class="spinner spinner-lg"></span><span>Loading backups…</span></div>`
-            : snaps.length === 0
-              ? `<div class="empty">
-                  <span class="empty-icon">${icon("archive", 28)}</span>
-                  <h2 class="empty-title">No backups yet</h2>
-                  <p class="empty-sub">Create a snapshot to capture the current addon state for a safe restore point.</p>
-                  <div class="empty-actions">
-                    <button class="btn btn-primary" data-create>${icon("archive", 16)}<span>Create backup</span></button>
-                  </div>
-                </div>`
-              : `<div class="table-wrap"><table class="table">
-                  <thead><tr><th>ID</th><th>Created</th><th>Reason</th><th>Folders</th><th></th></tr></thead>
-                  <tbody>
-                    ${snaps.map((s) => renderRow(s, busy)).join("")}
-                  </tbody>
-                </table></div>`
-        }
+        <div class="backups">
+          <div class="backups-toolbar">
+            <button class="btn-primary" data-create ${busy ? "disabled" : ""}>
+              ${creating ? `<span class="backups-spin"></span>` : icon("archive", 15)}
+              <span>${creating ? "Creating…" : "Backup now"}</span>
+            </button>
+            ${result ? `<span class="backups-count tnum">${snaps.length} snapshot${snaps.length === 1 ? "" : "s"}</span>` : ""}
+            <span class="backups-hint">Snapshots are taken automatically before every change when auto-backup is on.</span>
+          </div>
 
-        ${snapshotSectionHtml()}
+          ${renderList(snaps, busy)}
+
+          <div class="backups-note">
+            ${icon("info", 15)}
+            <span>Offline snapshot export and check live in the Updates view — export the tracked set to portable JSON and diff it with no network.</span>
+          </div>
+        </div>
+      </section>`;
+
+    host.querySelectorAll<HTMLElement>("[data-create]").forEach((btn) =>
+      btn.addEventListener("click", () => void create()),
+    );
+    host.querySelectorAll<HTMLElement>("[data-retry]").forEach((btn) =>
+      btn.addEventListener("click", () => void load()),
+    );
+    host.querySelectorAll<HTMLElement>("[data-restore]").forEach((btn) => {
+      const snap = snaps.find((s) => s.id === btn.dataset.restore);
+      if (snap) {
+        btn.addEventListener("click", () => {
+          pendingFocus = `restore:${snap.id}`;
+          void restore(snap);
+        });
+      }
+    });
+  };
+
+  const renderList = (snaps: BackupInfo[], busy: boolean): string => {
+    if (!result) {
+      if (loading) {
+        return `<div class="backups-loading"><span class="backups-spin"></span><span>Loading backups…</span></div>`;
+      }
+      if (loadError) return renderError(loadError);
+      return "";
+    }
+    if (snaps.length === 0) {
+      return `
+        <div class="empty-state">
+          <span class="empty-title">No backups yet</span>
+          <span class="empty-body">Create a snapshot to capture the current addon state as a safe restore point.</span>
+          <button class="btn-primary" data-create>${icon("archive", 15)}<span>Backup now</span></button>
+        </div>`;
+    }
+    return `
+      <div class="backups-table-wrap">
+        <table class="backups-table">
+          <thead>
+            <tr><th>Snapshot</th><th>Created</th><th>Reason</th><th>Folders</th><th></th></tr>
+          </thead>
+          <tbody>
+            ${snaps.map((s) => renderRow(s, busy)).join("")}
+          </tbody>
+        </table>
       </div>`;
-
-    el.querySelectorAll<HTMLElement>("[data-create]").forEach((btn) => {
-      btn.addEventListener("click", () => void create());
-    });
-    el.querySelectorAll<HTMLElement>("[data-restore]").forEach((btn) => {
-      const snap = snaps.find((x) => x.id === btn.dataset.restore);
-      if (snap) btn.addEventListener("click", () => void restore(snap));
-    });
-    el.querySelector("[data-snapshot-toggle]")?.addEventListener("click", () => {
-      pendingFocus = "snapshot-toggle";
-      snapshotOpen = !snapshotOpen;
-      rerender();
-    });
-    el.querySelector("[data-snapshot-export]")?.addEventListener("click", () => {
-      pendingFocus = "snapshot-export";
-      void exportSnapshot();
-    });
-    el.querySelector("[data-snapshot-copy]")?.addEventListener("click", () => {
-      pendingFocus = "snapshot-copy";
-      void copySnapshot();
-    });
-    el.querySelector<HTMLTextAreaElement>("[data-snapshot-check-input]")?.addEventListener("input", (e) => {
-      snapshotInput = (e.target as HTMLTextAreaElement).value;
-    });
-    el.querySelector("[data-snapshot-check]")?.addEventListener("click", () => {
-      pendingFocus = "snapshot-check";
-      void checkSnapshot();
-    });
   };
 
   const renderRow = (s: BackupInfo, busy: boolean): string => `
     <tr>
-      <td class="mono">${escapeHtml(s.id)}</td>
-      <td class="mono">${escapeHtml(formatCreated(s.created_at))}</td>
-      <td>${escapeHtml(s.reason || "n/a")}</td>
-      <td class="backups-folders">
-        ${s.folders.length
-          ? s.folders
-              .slice(0, 4)
-              .map((f) => `<span class="tag tag-tracked">${escapeHtml(f)}</span>`)
-              .join("") +
-            (s.folders.length > 4
-              ? `<span class="muted">+${s.folders.length - 4}</span>`
-              : "")
-          : `<span class="muted">n/a</span>`}
-      </td>
-      <td class="backups-actions">
-        <button class="btn btn-danger btn-sm" data-restore="${escapeAttr(s.id)}" ${busy ? "disabled" : ""}>
-          ${icon("download", 13)}<span>Restore</span>
+      <td class="backups-id mono" data-label="Snapshot">${escapeHtml(s.id)}</td>
+      <td class="backups-when tnum" data-label="Created">${escapeHtml(formatCreated(s.created_at))}</td>
+      <td class="backups-reason" data-label="Reason">${escapeHtml(s.reason || "—")}</td>
+      <td class="backups-folders tnum" data-label="Folders">${s.folders}</td>
+      <td class="backups-actions" data-label="">
+        <button class="btn-danger backups-btn-small" data-restore="${escapeAttr(s.id)}" ${busy ? "disabled" : ""}>
+          ${restoringId === s.id ? `<span class="backups-spin"></span>` : icon("download", 13)}
+          <span>${restoringId === s.id ? "Restoring…" : "Restore"}</span>
         </button>
       </td>
     </tr>`;
 
-  // Read-only variant of the update row: same layout, no apply button —
-  // the snapshot check is a pure offline diff, applying stays a live
-  // CheckUpdates/ApplyUpdate flow.
-  const renderSnapshotRow = (u: UpdateEntry): string => `
-    <div class="update-row${u.flavor_mismatch ? " has-mismatch" : ""}">
-      <div class="update-info">
-        <div class="update-name-line">
-          <span class="update-name">${escapeHtml(u.title)}</span>
-          <span class="update-folder mono">${escapeHtml(u.folder)}</span>
-        </div>
-        ${
-          u.flavor_mismatch
-            ? `<span class="mismatch-badge" title="Different game version - confirm before applying">${icon("alert", 12)}<span>${escapeHtml(u.flavor_label)}</span></span>`
-            : ""
-        }
+  const renderError = (msg: string): string => `
+    <div class="backups-error" role="alert">
+      ${icon("alert", 15)}
+      <div class="backups-error-body">
+        <p>${escapeHtml(msg)}</p>
+        <button class="btn-secondary backups-btn-small" data-retry>${icon("refresh", 13)}<span>Retry</span></button>
       </div>
-      <div class="update-versions mono" aria-label="Version change">
-        <span class="update-ver-cur">${escapeHtml(u.current_version || "n/a")}</span>
-        <span class="update-arrow">${icon("chevron-right", 13)}</span>
-        <span class="update-ver-latest">${escapeHtml(u.latest_version || "n/a")}</span>
-      </div>
-      <div class="update-provider">${providerChip(u.provider)}</div>
-      <div class="update-action"></div>
     </div>`;
 
-  const checkResultHtml = (): string => {
-    if (checkingSnapshot) {
-      return `<div class="list-loading"><span class="spinner"></span><span>Checking snapshot…</span></div>`;
-    }
-    if (snapshotCheckErr) {
-      return `<div class="managed-error" role="alert">${icon("alert", 14)}<span>${escapeHtml(snapshotCheckErr)}</span></div>`;
-    }
-    if (!snapshotCheck) return "";
-    const ups = snapshotCheck.updates ?? [];
-    const errs = snapshotCheck.errors ?? [];
-    return `
-      <div class="updates-summary" aria-label="Snapshot check summary">
-        <span class="count-item"><span class="status-dot ok"></span><span class="count-num">${ups.length}</span> update${ups.length === 1 ? "" : "s"} available</span>
-        <span class="count-item ${errs.length ? "" : "muted"}"><span class="status-dot ${errs.length ? "warn" : "muted"}"></span><span class="count-num">${errs.length}</span> warning${errs.length === 1 ? "" : "s"}</span>
-      </div>
-      ${
-        errs.length
-          ? `<div class="snapshot-errors">${errs
-              .map((e) => `<div class="managed-error" role="alert">${icon("alert", 14)}<span>${escapeHtml(e)}</span></div>`)
-              .join("")}</div>`
-          : ""
-      }
-      ${
-        ups.length === 0
-          ? `<p class="result-hint">Nothing to update. The registry already matches this snapshot.</p>`
-          : `<div class="update-rows">${ups.map(renderSnapshotRow).join("")}</div>`
-      }`;
-  };
-
-  const snapshotSectionHtml = (): string => {
-    const exportSummary = snapshot
-      ? `<p class="result-hint">${snapshot.addon_count} addon${snapshot.addon_count === 1 ? "" : "s"} · exported ${formatDateTime(snapshot.exported_at)}</p>`
-      : "";
-    const exportWarnings =
-      snapshot && snapshot.warnings.length > 0
-        ? `<ul class="snapshot-warnings" style="margin:0; padding-left:18px; display:flex; flex-direction:column; gap:2px; font-size:var(--caption); color:var(--warn)">
-            ${snapshot.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}
-          </ul>`
-        : "";
-    return `
-      <section class="snapshot" aria-label="Snapshot - offline update check">
-        <button class="btn btn-ghost btn-sm snapshot-toggle" data-snapshot-toggle aria-expanded="${snapshotOpen}" aria-controls="snapshot-body">
-          ${icon(snapshotOpen ? "chevron-down" : "chevron-right", 14)}
-          <span>Snapshot</span>
-          <span class="muted">offline update check</span>
-        </button>
-        ${
-          snapshotOpen
-            ? `<div class="snapshot-body" id="snapshot-body">
-                <div class="field-row snapshot-cols">
-                  <div class="field snapshot-col">
-                    <h3 class="detail-title">Export</h3>
-                    <p class="result-hint">Freeze the tracked addons and their latest known versions into portable JSON for an offline check.</p>
-                    <div class="snapshot-actions">
-                      <button class="btn btn-outline btn-sm" data-snapshot-export ${exporting ? "disabled" : ""}>
-                        ${exporting ? `<span class="spinner"></span>` : icon("download", 14)}
-                        <span>${exporting ? "Exporting…" : "Export snapshot"}</span>
-                      </button>
-                      ${
-                        snapshot
-                          ? `<button class="btn btn-primary btn-sm" data-snapshot-copy>${icon("file", 14)}<span>Copy</span></button>`
-                          : ""
-                      }
-                    </div>
-                    ${exportSummary}
-                    ${
-                      snapshot
-                        ? `<textarea class="mono" data-snapshot-json readonly rows="10" spellcheck="false" aria-label="Exported snapshot JSON" style="${JSON_TEXTAREA_STYLE}">${escapeHtml(snapshot.snapshot_json)}</textarea>`
-                        : ""
-                    }
-                    ${exportWarnings}
-                  </div>
-                  <div class="field snapshot-col">
-                    <h3 class="detail-title">Check</h3>
-                    <p class="result-hint">Paste a snapshot and diff it against the current registry. No network access.</p>
-                    <textarea class="mono" data-snapshot-check-input rows="7" spellcheck="false" aria-label="Snapshot JSON to check" placeholder="Paste snapshot JSON here…" style="${JSON_TEXTAREA_STYLE}">${escapeHtml(snapshotInput)}</textarea>
-                    <div class="snapshot-actions">
-                      <button class="btn btn-primary btn-sm" data-snapshot-check ${checkingSnapshot ? "disabled" : ""}>
-                        ${checkingSnapshot ? `<span class="spinner"></span>` : icon("search", 14)}
-                        <span>${checkingSnapshot ? "Checking…" : "Check"}</span>
-                      </button>
-                    </div>
-                    ${checkResultHtml()}
-                  </div>
-                </div>
-              </div>`
-            : ""
-        }
-      </section>`;
-  };
-
-  render();
   void load();
-
-  return { refresh: render };
-}
-
-function providerChip(provider: string): string {
-  const label = PROVIDER_LABEL[provider] ?? provider;
-  return `<span class="provider-chip prov-${escapeAttr(provider)}" title="${escapeAttr(provider)}">${escapeHtml(label)}</span>`;
 }
 
 function formatCreated(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString();
-}
-
-function formatDateTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return (
-    d.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" }) +
-    " " +
-    d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-  );
+  return d.toLocaleString([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function errText(err: unknown, fallback?: string): string {

@@ -1,248 +1,567 @@
-// Settings view — config keys editable from the app. Auto-backup and
-// confirmation checkboxes, plus the backups / collections / API-key paths.
-// Every save goes through SetConfigKey; the install-derived keys (wow_path,
-// flavor, profile, collection) are shown read-only with a hint that they are
-// managed from Setup and Collections.
+// Settings view. Three sections: the config keys (inline edit → SetConfigKey),
+// the installations grid (InstallsStatus + SetInstall/SetProfile + Scan +
+// SyncUpdatesToAll), and an About block (version from GetState). Busy states
+// disable the acting control only; failures surface at the section level.
 
-import type { AppState, Actions } from "../app";
-import type { ConfigView } from "../types";
+import type { View } from "../view";
+import type {
+  ConfigView,
+  Install,
+  InstallStatus,
+  InstallsStatusResult,
+  SyncResult,
+} from "../types";
 import { icon } from "../icons";
 import { service } from "../api";
-import { toast } from "../components/toast";
-import { mountInstalls } from "./installs";
+import { toast } from "../toast";
+import { confirmDialog } from "../dialog";
+import "./settings.css";
 
-const TEXT_KEYS = ["backups_dir", "curseforge_api_key", "collections_dir"] as const;
+/** Editable text keys, in display order. Booleans are rendered as switches. */
+const TEXT_KEYS = [
+  "wow_path",
+  "flavor",
+  "profile",
+  "collection",
+  "backups_dir",
+  "curseforge_api_key",
+  "collections_dir",
+] as const;
+
+const BOOL_KEYS = ["auto_backup", "confirmations"] as const;
 
 const KEY_LABELS: Record<string, string> = {
+  wow_path: "WoW install path",
+  flavor: "Flavor",
+  profile: "Profile",
+  collection: "Active collection",
   auto_backup: "Auto-backup",
   confirmations: "Confirmations",
   backups_dir: "Backups folder",
   curseforge_api_key: "CurseForge API key",
   collections_dir: "Collections folder",
-  wow_path: "WoW install path",
-  flavor: "Flavor",
-  profile: "Profile",
-  collection: "Active collection",
 };
 
-let installsRefresh: (() => void) | null = null;
+const KEY_HINTS: Record<string, string> = {
+  wow_path: "Normally set from Setup — editing here overrides the current install.",
+  flavor: "Game flavor (retail / classic / classic_era).",
+  profile: "Normally set from the Installations section.",
+  collection: "Normally switched from Collections.",
+  auto_backup: "Snapshot addons before every change — fixes, installs, switches.",
+  confirmations: "Ask before destructive operations.",
+  backups_dir: "Where addon snapshots are stored.",
+  curseforge_api_key: "Optional key for higher CurseForge rate limits. Stored locally.",
+  collections_dir: "Where exported collection profiles are saved.",
+};
 
-export function mountSettings(
-  el: HTMLElement,
-  app: AppState,
-  actions: Actions,
-): { refresh: () => void } {
-  let cfg: ConfigView | null = null;
-  let loading = false;
-  let saving: string | null = null;
-  let error: string | null = null;
-  let drafts: Record<string, string> = {};
-  let refocus: { sel: string; pos: number } | null = null;
+const GROUP_ORDER: { title: string; keys: readonly string[] }[] = [
+  { title: "Install", keys: ["wow_path", "flavor", "profile", "collection"] },
+  { title: "Behavior", keys: ["auto_backup", "confirmations"] },
+  { title: "Paths & API key", keys: ["backups_dir", "curseforge_api_key", "collections_dir"] },
+];
 
-  // Persistent installs section element that survives re-renders
-  const installsSection = document.createElement("div");
-  installsSection.className = "settings-section";
-  installsSection.id = "settings-installs-section";
-  installsSection.innerHTML = `<h3 class="detail-title">Installations</h3><div id="settings-installs-mount"></div>`;
-  const installsMountEl = installsSection.querySelector<HTMLElement>("#settings-installs-mount")!;
-  installsRefresh = mountInstalls(installsMountEl, app, actions).refresh;
+export const view: View = {
+  id: "settings",
+  label: "Settings",
+  icon: "settings",
+  mount(host) {
+    let cfg: ConfigView | null = null;
+    let installs: InstallsStatusResult | null = null;
+    let version = "";
+    let cfgError: string | null = null;
+    let installsError: string | null = null;
+    let loading = true;
+    let saving: string | null = null; // config key being saved
+    let activating = ""; // install root being set active
+    let scanning = ""; // install root being scanned
+    let syncing = false;
+    let syncResult: SyncResult | null = null;
+    let drafts: Record<string, string> = {};
+    let refocus: { sel: string; pos: number } | null = null;
 
-  const rerender = (): void => {
-    render();
-    if (!refocus) return;
-    const target = el.querySelector<HTMLInputElement>(refocus.sel);
-    if (target) {
-      target.focus();
-      if (refocus.pos >= 0) {
-        const pos = Math.min(refocus.pos, target.value.length);
-        target.setSelectionRange(pos, pos);
+    const load = async (): Promise<void> => {
+      loading = true;
+      rerender();
+      try {
+        const [c, i, state] = await Promise.all([
+          service.Config(),
+          service.InstallsStatus(),
+          service.GetState(),
+        ]);
+        cfg = c;
+        installs = i;
+        version = state.version;
+        drafts = {
+          wow_path: c.wow_path,
+          flavor: c.flavor,
+          profile: c.profile,
+          collection: c.collection,
+          backups_dir: c.backups_dir,
+          curseforge_api_key: c.curseforge_api_key,
+          collections_dir: c.collections_dir,
+        };
+      } catch (err) {
+        toast({
+          type: "error",
+          title: "Could not load settings",
+          message: errText(err),
+        });
+      } finally {
+        loading = false;
+        rerender();
       }
-    }
-    refocus = null;
-  };
+    };
 
-  const load = async (): Promise<void> => {
-    loading = true;
-    rerender();
-    try {
-      cfg = await service.Config();
-      drafts = {
-        backups_dir: cfg.backups_dir,
-        curseforge_api_key: cfg.curseforge_api_key,
-        collections_dir: cfg.collections_dir,
-      };
-    } catch (err) {
-      toast({
-        type: "error",
-        title: "Could not load settings",
-        message: errText(err),
-      });
-    } finally {
-      loading = false;
+    // --- config save -----------------------------------------------------
+
+    const saveKey = async (key: string, value: string): Promise<void> => {
+      if (saving) return;
+      saving = key;
       rerender();
-    }
-  };
-
-  const save = async (key: string, value: string): Promise<void> => {
-    if (saving) return;
-    saving = key;
-    error = null;
-    rerender();
-    try {
-      await service.SetConfigKey(key, value);
-      if (cfg) (cfg as unknown as Record<string, unknown>)[key] = coerceValue(key, value);
-      if (key in drafts) drafts[key] = value;
-      toast({
-        type: "ok",
-        title: `${KEY_LABELS[key] ?? key} saved`,
-        message: coerceValue(key, value) === true
-          ? "on"
-          : coerceValue(key, value) === false
-            ? "off"
+      try {
+        await service.SetConfigKey(key, value);
+        if (cfg) {
+          const coerced = coerceValue(key, value);
+          (cfg as unknown as Record<string, unknown>)[key] = coerced;
+        }
+        drafts[key] = value;
+        toast({
+          type: "ok",
+          title: `${KEY_LABELS[key] ?? key} saved`,
+          message: typeof coerceValue(key, value) === "boolean"
+            ? coerceValue(key, value) ? "on" : "off"
             : value,
+        });
+      } catch (err) {
+        toast({
+          type: "error",
+          title: `Could not save ${KEY_LABELS[key] ?? key}`,
+          message: errText(err),
+        });
+      } finally {
+        saving = null;
+        rerender();
+      }
+    };
+
+    // --- installs --------------------------------------------------------
+
+    const refreshInstalls = async (): Promise<void> => {
+      try {
+        installs = await service.InstallsStatus();
+        installsError = null;
+      } catch (err) {
+        installsError = errText(err);
+      }
+      rerender();
+    };
+
+    const setActive = async (inst: InstallStatus): Promise<void> => {
+      if (activating || scanning || syncing) return;
+      activating = inst.root;
+      rerender();
+      try {
+        const installed: Install = await service.SetInstall(inst.root, inst.flavor);
+        await service.SetProfile(installed.profile_id || inst.profile_id);
+        toast({
+          type: "ok",
+          title: "Active install switched",
+          message: `${inst.flavor || "install"} — ${inst.root}`,
+        });
+      } catch (err) {
+        toast({
+          type: "error",
+          title: "Could not switch install",
+          message: errText(err),
+        });
+      } finally {
+        activating = "";
+        await refreshInstalls();
+      }
+    };
+
+    const scanInstall = async (inst: InstallStatus): Promise<void> => {
+      if (activating || scanning || syncing) return;
+      scanning = inst.root;
+      rerender();
+      try {
+        const installed: Install = await service.SetInstall(inst.root, inst.flavor);
+        await service.SetProfile(installed.profile_id || inst.profile_id);
+        const res = await service.Scan();
+        const s = res.stats;
+        toast({
+          type: s.errors > 0 ? "warn" : "ok",
+          title: `Scanned ${inst.flavor || "install"}`,
+          message: `${s.total} addons · ${s.problems} with issues · ${s.errors} errors`,
+        });
+      } catch (err) {
+        toast({
+          type: "error",
+          title: "Scan failed",
+          message: errText(err),
+        });
+      } finally {
+        scanning = "";
+        await refreshInstalls();
+      }
+    };
+
+    const updateAll = async (): Promise<void> => {
+      if (syncing || !installs) return;
+      const ready = installs.installs.filter((i) => i.exists).length;
+      if (ready === 0) return;
+      const confirmed = await confirmDialog({
+        title: `Update all installs (${ready})?`,
+        message:
+          "Every detected install is checked against its providers and updated to the latest matching version. Flavor-mismatched updates are skipped.",
+        confirmLabel: "Update All",
       });
-    } catch (err) {
-      error = `${KEY_LABELS[key] ?? key}: ${errText(err)}`;
+      if (!confirmed) return;
+      syncing = true;
+      syncResult = null;
       rerender();
-    } finally {
-      saving = null;
-      rerender();
-    }
-  };
+      try {
+        const res = await service.SyncUpdatesToAll(true);
+        syncResult = res;
+        const touched = res.installs.filter(
+          (i) => i.updated > 0 || i.failed > 0,
+        ).length;
+        toast({
+          type:
+            res.total_failed > 0
+              ? res.total_updated > 0
+                ? "warn"
+                : "error"
+              : "ok",
+          title:
+            res.total_failed > 0
+              ? "Update all completed with errors"
+              : "Update all complete",
+          message: `${res.total_updated} updated · ${res.total_failed} failed across ${touched} install${touched === 1 ? "" : "s"}`,
+        });
+      } catch (err) {
+        toast({
+          type: "error",
+          title: "Update all failed",
+          message: errText(err),
+        });
+      } finally {
+        syncing = false;
+        await refreshInstalls();
+      }
+    };
 
-  const render = (): void => {
-    if (loading) {
-      el.innerHTML = `<div class="list-loading"><span class="spinner spinner-lg"></span><span>Loading settings…</span></div>`;
-      return;
-    }
-    if (!cfg) {
-      el.innerHTML = `<div class="empty">
-        <span class="empty-icon">${icon("edit", 28)}</span>
-        <h2 class="empty-title">Settings unavailable</h2>
-        <p class="empty-sub">The backend did not return a configuration.</p>
+    // --- render ----------------------------------------------------------
+
+    const rerender = (): void => {
+      render();
+      if (!refocus) return;
+      const target = host.querySelector<HTMLInputElement>(refocus.sel);
+      if (target) {
+        target.focus();
+        if (refocus.pos >= 0) {
+          const pos = Math.min(refocus.pos, target.value.length);
+          target.setSelectionRange(pos, pos);
+        }
+      }
+      refocus = null;
+    };
+
+    const render = (): void => {
+      if (loading) {
+        host.innerHTML = `
+          <section class="view-page settings-page">
+            <div class="view-hero">
+              <h1 class="view-title">Settings</h1>
+              <p class="view-sub">Configuration, installations and app information.</p>
+            </div>
+            <div class="list-loading"><span class="loading-pulse"></span><span>Loading settings…</span></div>
+          </section>`;
+        return;
+      }
+
+      host.innerHTML = `
+        <section class="view-page settings-page">
+          <div class="view-hero">
+            <h1 class="view-title">Settings</h1>
+            <p class="view-sub">Configuration, installations and app information.</p>
+          </div>
+
+          ${renderConfigSection()}
+          ${renderInstallsSection()}
+          ${renderAboutSection()}
+        </section>`;
+
+      host.querySelectorAll<HTMLInputElement>("[data-text]").forEach((input) => {
+        const key = input.dataset.text ?? "";
+        input.addEventListener("input", () => {
+          drafts[key] = input.value;
+          refocus = {
+            sel: `[data-text="${key}"]`,
+            pos: input.selectionStart ?? input.value.length,
+          };
+          rerender();
+        });
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void saveKey(key, input.value.trim());
+          }
+        });
+      });
+      host.querySelectorAll<HTMLElement>("[data-save]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const key = btn.dataset.save ?? "";
+          void saveKey(key, (drafts[key] ?? "").trim());
+        });
+      });
+      host.querySelectorAll<HTMLInputElement>("[data-bool]").forEach((input) => {
+        input.addEventListener("change", () => {
+          void saveKey(input.dataset.bool ?? "", input.checked ? "true" : "false");
+        });
+      });
+      host.querySelectorAll<HTMLElement>("[data-active]").forEach((btn) => {
+        const inst = installs?.installs[Number(btn.dataset.active)];
+        if (inst) btn.addEventListener("click", () => void setActive(inst));
+      });
+      host.querySelectorAll<HTMLElement>("[data-scan]").forEach((btn) => {
+        const inst = installs?.installs[Number(btn.dataset.scan)];
+        if (inst) btn.addEventListener("click", () => void scanInstall(inst));
+      });
+      host.querySelector("[data-update-all]")?.addEventListener("click", () => {
+        void updateAll();
+      });
+    };
+
+    const renderConfigSection = (): string => {
+      const groups = cfg
+        ? GROUP_ORDER.map(
+            (g) => `
+          <div class="cfg-group">${escapeHtml(g.title)}</div>
+          ${g.keys.map((key) => renderConfigRow(key)).join("")}`,
+          ).join("")
+        : "";
+
+      return `
+        <section class="settings-section" aria-labelledby="settings-config-title">
+          <div class="section-head">
+            <div class="section-head-text">
+              <h2 id="settings-config-title" class="section-title">Configuration</h2>
+              <p class="section-desc">Editable key/value pairs. Install-derived keys are normally managed from Setup and the Installations section.</p>
+            </div>
+          </div>
+          ${cfgError ? `<p class="section-error" role="alert">${icon("x-circle", 15)}<span>${escapeHtml(cfgError)}</span></p>` : ""}
+          ${
+            cfg
+              ? `<div class="card cfg-card">${groups}</div>`
+              : `<div class="card"><p class="section-desc">Configuration unavailable.</p></div>`
+          }
+        </section>`;
+    };
+
+    const renderConfigRow = (key: string): string => {
+      const c = cfg as unknown as Record<string, unknown>;
+      if (BOOL_KEYS.includes(key as (typeof BOOL_KEYS)[number])) {
+        const on = Boolean(c[key]);
+        return `
+          <div class="cfg-row">
+            <div class="cfg-key">
+              <span class="cfg-label">${escapeHtml(KEY_LABELS[key] ?? key)}</span>
+              <span class="cfg-hint">${escapeHtml(KEY_HINTS[key] ?? "")}</span>
+            </div>
+            <label class="switch cfg-value">
+              <input type="checkbox" data-bool="${key}" ${on ? "checked" : ""} ${saving ? "disabled" : ""} aria-label="${escapeAttr(KEY_LABELS[key] ?? key)}" />
+              <span class="switch-track"></span>
+              <span class="switch-thumb"></span>
+            </label>
+          </div>`;
+      }
+      const value = drafts[key] ?? String(c[key] ?? "");
+      const isSecret = key === "curseforge_api_key";
+      const isSaving = saving === key;
+      const dirty = value !== String(c[key] ?? "");
+      return `
+        <div class="cfg-row">
+          <div class="cfg-key">
+            <span class="cfg-label">${escapeHtml(KEY_LABELS[key] ?? key)}</span>
+            <span class="cfg-hint">${escapeHtml(KEY_HINTS[key] ?? "")}</span>
+          </div>
+          <div class="cfg-field">
+            <input class="text-input cfg-input${key === "wow_path" || key === "backups_dir" || key === "collections_dir" ? " mono" : ""}" id="settings-${key}"
+              type="${isSecret ? "password" : "text"}" spellcheck="false" autocomplete="off"
+              value="${escapeAttr(value)}" data-text="${key}" ${saving ? "disabled" : ""} />
+            <button class="btn-secondary" data-save="${key}" ${saving || !dirty ? "disabled" : ""}>
+              ${isSaving ? icon("refresh", 15) : icon("check", 15)}
+              <span>${isSaving ? "Saving…" : "Save"}</span>
+            </button>
+          </div>
+        </div>`;
+    };
+
+    const renderInstallsSection = (): string => {
+      const list = installs?.installs ?? [];
+      const ready = list.filter((i) => i.exists).length;
+      const busy = Boolean(activating || scanning || syncing);
+      return `
+        <section class="settings-section" aria-labelledby="settings-installs-title">
+          <div class="section-head">
+            <div class="section-head-text">
+              <h2 id="settings-installs-title" class="section-title">Installations</h2>
+              <p class="section-desc">Every WoW install detected on this machine. Set the active one, scan its addons, or update all of them in one pass.</p>
+            </div>
+            <div class="section-toolbar">
+              <button class="btn-primary" data-update-all ${busy || ready === 0 ? "disabled" : ""}>
+                ${syncing ? icon("refresh", 15) : icon("download", 15)}
+                <span>${syncing ? "Updating…" : `Update all installs (${ready})`}</span>
+              </button>
+              ${installs ? `<span class="toolbar-summary">${list.length} install${list.length === 1 ? "" : "s"} detected · ${ready} ready</span>` : ""}
+            </div>
+          </div>
+
+          ${installsError ? `<p class="section-error" role="alert">${icon("x-circle", 15)}<span>${escapeHtml(installsError)}</span></p>` : ""}
+          ${syncResult ? renderSyncResult(syncResult) : ""}
+
+          ${
+            !installs
+              ? `<div class="list-loading"><span class="loading-pulse"></span><span>Checking installs…</span></div>`
+              : list.length === 0
+                ? `<div class="card"><p class="section-desc">No WoW installations detected. Point wowfix at one from Setup.</p></div>`
+                : `<div class="install-cards">${list.map((inst, i) => renderInstallCard(inst, i, busy)).join("")}</div>`
+          }
+        </section>`;
+    };
+
+    const renderInstallCard = (inst: InstallStatus, i: number, busy: boolean): string => {
+      const band: "ok" | "warn" | "error" =
+        inst.health >= 85 ? "ok" : inst.health >= 60 ? "warn" : "error";
+      const bandLabel =
+        band === "ok" ? "Healthy" : band === "warn" ? "Needs attention" : "Needs repair";
+      const isBusy = busy || activating === inst.root || scanning === inst.root;
+
+      const head = `
+        <div class="install-card-head">
+          <span class="install-path mono" title="${escapeAttr(inst.root)}">${escapeHtml(truncateMiddle(inst.root, 46))}</span>
+          ${inst.flavor ? `<span class="flavor-tag">${escapeHtml(inst.flavor)}</span>` : ""}
+          ${inst.version ? `<span class="install-version mono">v${escapeHtml(inst.version)}</span>` : ""}
+          ${inst.confidence ? `<span class="confidence-chip ${confClass(inst.confidence)}">${escapeHtml(inst.confidence)} confidence</span>` : ""}
+        </div>`;
+
+      if (!inst.exists) {
+        return `
+          <div class="install-card missing">
+            ${head}
+            <div class="install-missing">${icon("alert", 16)}<span>AddOns folder not found</span></div>
+          </div>`;
+      }
+
+      return `
+        <div class="install-card">
+          ${head}
+          <div class="install-band">
+            <span class="install-score">${inst.health}</span>
+            <span class="install-denom">/100</span>
+            <span class="install-band-label ${band}">${bandLabel}</span>
+            <span class="install-healthbar ${band}"><i style="width:${Math.max(0, Math.min(100, inst.health))}%"></i></span>
+          </div>
+          <div class="install-stats">
+            <span class="stat-item"><span class="status-dot ok"></span><span class="stat-num">${inst.addons}</span> addons</span>
+            <span class="stat-item"><span class="status-dot warn"></span><span class="stat-num">${inst.problems}</span> with issues</span>
+            <span class="stat-item"><span class="status-dot ${inst.errors > 0 ? "error" : ""}"></span><span class="stat-num">${inst.errors}</span> error${inst.errors === 1 ? "" : "s"}</span>
+          </div>
+          <div class="install-actions">
+            <button class="btn-secondary" data-scan="${i}" ${busy ? "disabled" : ""}>
+              ${icon("refresh", 15)}
+              <span>${scanning === inst.root ? "Scanning…" : "Scan"}</span>
+            </button>
+            <button class="btn-primary" data-active="${i}" ${isBusy ? "disabled" : ""}>
+              ${activating === inst.root ? icon("refresh", 15) : icon("check", 15)}
+              <span>${activating === inst.root ? "Setting…" : "Set as active"}</span>
+            </button>
+          </div>
+        </div>`;
+    };
+
+    const renderSyncResult = (res: SyncResult): string => `
+      <div class="sync-result" role="status">
+        <div class="sync-summary">
+          <span class="sync-summary-icon ${res.total_failed > 0 ? "has-errors" : ""}">
+            ${icon(res.total_failed > 0 ? "alert" : "check-circle", 18)}
+          </span>
+          <span><b>${res.total_updated} updated</b>
+            ${res.total_failed > 0 ? ` · ${res.total_failed} failed` : ""}
+            <span class="muted"> across ${res.installs.length} install${res.installs.length === 1 ? "" : "s"}</span>
+          </span>
+        </div>
+        ${res.installs.some((r) => r.failed > 0 || r.errors.length > 0)
+          ? `<div class="sync-rows">
+              ${res.installs
+                .map((r) => {
+                  if (r.failed === 0 && r.errors.length === 0) return "";
+                  return `
+                <div class="sync-row">
+                  <span class="sync-root mono">${escapeHtml(truncateMiddle(r.root, 60))}</span>
+                  <span class="section-desc">${r.updated} updated · ${r.failed} failed</span>
+                  ${
+                    r.errors.length
+                      ? `<ul class="sync-errors">${r.errors
+                          .map((e) => `<li>${icon("x-circle", 13)}<span>${escapeHtml(e)}</span></li>`)
+                          .join("")}</ul>`
+                      : ""
+                  }
+                </div>`;
+                })
+                .join("")}
+            </div>`
+          : ""}
       </div>`;
-      return;
-    }
 
-    const textFields = TEXT_KEYS.map((key) => renderTextField(key, cfg!)).join("");
-
-    el.innerHTML = `
-      <div class="settings">
-        <h2 class="detail-title">Settings</h2>
-
-        <div class="settings-section">
-          <h3 class="detail-title">Behavior</h3>
-          ${renderCheckbox("auto_backup", "Auto-backup", "Snapshot addons before every change (fixes, installs, switches).")}
-          ${renderCheckbox("confirmations", "Confirmations", "Ask before destructive operations in the app.")}
-        </div>
-
-        <div class="settings-section">
-          <h3 class="detail-title">Paths & API key</h3>
-          ${textFields}
-        </div>
-
-        <div class="settings-section">
-          <h3 class="detail-title">Managed elsewhere</h3>
-          <p class="field-hint">These keys come from Setup and Collections. Edit them there.</p>
-          <div class="settings-readonly">
-            ${renderReadonly("wow_path", cfg!.wow_path || "n/a")}
-            ${renderReadonly("flavor", cfg!.flavor || "n/a")}
-            ${renderReadonly("profile", cfg!.profile || "n/a")}
-            ${renderReadonly("collection", cfg!.collection || "n/a")}
+    const renderAboutSection = (): string => `
+      <section class="settings-section" aria-labelledby="settings-about-title">
+        <div class="section-head">
+          <div class="section-head-text">
+            <h2 id="settings-about-title" class="section-title">About</h2>
           </div>
         </div>
-
-        ${error ? `<p class="settings-error" role="alert" style="color: var(--error)">${icon("x-circle", 14)}<span>${escapeHtml(error)}</span></p>` : ""}
-      </div>`;
-
-    // Append persistent installs section after settings container is created
-    const settingsContainer = el.querySelector(".settings");
-    if (settingsContainer) {
-      settingsContainer.appendChild(installsSection);
-    }
-
-    el.querySelectorAll<HTMLInputElement>("[data-check]").forEach((input) => {
-      input.addEventListener("change", () => {
-        void save(input.dataset.check ?? "", input.checked ? "true" : "false");
-      });
-    });
-    el.querySelectorAll<HTMLInputElement>("[data-text]").forEach((input) => {
-      const key = input.dataset.text ?? "";
-      input.addEventListener("input", () => {
-        drafts[key] = input.value;
-        refocus = { sel: `[data-text="${key}"]`, pos: input.selectionStart ?? input.value.length };
-        rerender();
-      });
-      input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          void save(key, input.value.trim());
-        }
-      });
-    });
-    el.querySelectorAll<HTMLElement>("[data-save]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const key = btn.dataset.save ?? "";
-        void save(key, (drafts[key] ?? "").trim());
-      });
-    });
-  };
-
-  const renderTextField = (key: string, c: ConfigView): string => {
-    const value = drafts[key] ?? String(c[key as keyof ConfigView] ?? "");
-    const savingKey = saving === key;
-    const isSecret = key === "curseforge_api_key";
-    return `
-      <div class="field settings-field">
-        <label class="field-label" for="settings-${key}">${KEY_LABELS[key] ?? key}</label>
-        <div class="input-row">
-          <span class="input-icon">${icon(isSecret ? "lock" : "folder", 15)}</span>
-          <input class="input" id="settings-${key}" type="${isSecret ? "password" : "text"}"
-            spellcheck="false" autocomplete="off" value="${escapeAttr(value)}"
-            data-text="${key}" ${saving ? "disabled" : ""} />
-          <button class="btn btn-outline btn-sm" data-save="${key}" ${saving || value === String(c[key as keyof ConfigView]) ? "disabled" : ""}>
-            ${savingKey ? `<span class="spinner spinner-xs"></span>` : ""}
-            <span>${savingKey ? "Saving…" : "Save"}</span>
-          </button>
+        <div class="card about-card">
+          <div class="about-version">
+            <span class="about-app">wowfix</span>
+            <span class="about-ver">v${escapeHtml(version || "—")}</span>
+            ${cfg?.flavor ? `<span class="flavor-tag">${escapeHtml(cfg.flavor)}</span>` : ""}
+          </div>
+          <div class="about-meta">
+            ${cfg?.profile ? `<span>Profile: <span class="mono">${escapeHtml(cfg.profile)}</span></span>` : ""}
+            ${cfg?.wow_path ? `<span>Addons: <span class="mono">${escapeHtml(cfg.wow_path)}\\Interface\\AddOns</span></span>` : ""}
+          </div>
+          <p class="about-note">Repair, update and back up your World of Warcraft addons — with every change snapshotted before it happens.</p>
         </div>
-      </div>`;
-  };
+      </section>`;
 
-  const renderCheckbox = (key: string, label: string, hint: string): string => {
-    const on = Boolean(cfg![key as keyof ConfigView]);
-    const savingKey = saving === key;
-    return `
-      <label class="checkbox-row settings-check">
-        <input type="checkbox" class="checkbox" data-check="${key}" ${on ? "checked" : ""} ${saving ? "disabled" : ""} />
-        <span class="checkbox-box">${icon("check", 13)}</span>
-        <span class="checkbox-text">
-          <span>${label}${savingKey ? " (saving…)" : ""}</span>
-          <span class="checkbox-hint">${hint}</span>
-        </span>
-      </label>`;
-  };
+    rerender();
+    void load();
+  },
+};
 
-  const renderReadonly = (key: string, value: string): string => `
-    <div class="settings-readonly-row">
-      <span class="field-label">${KEY_LABELS[key] ?? key}</span>
-      <span class="mono muted">${escapeHtml(value)}</span>
-    </div>`;
-
-  render();
-  void load();
-
-  return {
-    refresh: () => {
-      rerender();
-      installsRefresh?.();
-    },
-  };
-}
-
-/** Config values arrive as JSON strings/bools; SetConfigKey takes strings. */
 function coerceValue(key: string, value: string): unknown {
   if (key === "auto_backup" || key === "confirmations") return value === "true";
   return value;
+}
+
+function confClass(confidence: string): "ok" | "warn" | "error" {
+  switch (confidence) {
+    case "high":
+      return "ok";
+    case "medium":
+      return "warn";
+    default:
+      return "error";
+  }
+}
+
+function truncateMiddle(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const head = Math.ceil((max - 1) / 2);
+  const tail = Math.floor((max - 1) / 2);
+  return `${s.slice(0, head)}…${s.slice(-tail)}`;
 }
 
 function errText(err: unknown, fallback?: string): string {

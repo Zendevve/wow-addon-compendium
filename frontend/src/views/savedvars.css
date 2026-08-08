@@ -1,0 +1,264 @@
+/* Saved Variables view: account picker (pill tabs), per-account file list,
+   backup / restore / reset / migrate operations. Layout: account card on
+   surface-1; operations card with divided rows. */
+
+.savedvars-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.section-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+
+.section-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  max-width: 560px;
+}
+
+.section-title {
+  font-size: var(--headline);
+  font-weight: var(--headline-w);
+  line-height: var(--headline-lh);
+  letter-spacing: var(--headline-ls);
+  color: var(--ink);
+}
+
+.section-desc {
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+}
+
+/* ---- account card: tabs + backup + file list ---- */
+
+.savedvars-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.savedvars-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+
+.account-tabs {
+  flex-wrap: wrap;
+}
+
+.account-tab {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.list-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  font-size: var(--caption);
+  color: var(--ink-faint);
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+
+.list-head .list-root {
+  font-family: var(--font-mono);
+  font-size: var(--micro);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
+.list-head .list-count {
+  white-space: nowrap;
+}
+
+.savedvars-files {
+  display: flex;
+  flex-direction: column;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-1);
+  border-bottom: 1px solid var(--hairline-soft);
+  font-family: var(--font-mono);
+  font-size: var(--body-sm);
+  color: var(--ink);
+}
+
+.file-row:last-child {
+  border-bottom: 0;
+}
+
+.file-row .file-icon {
+  color: var(--ink-faint);
+  flex: none;
+}
+
+.file-row:hover {
+  background: var(--surface-2);
+  border-radius: var(--r-md);
+}
+
+.files-empty {
+  padding: var(--sp-4) 0;
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+}
+
+.auto-backup-note {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--caption);
+  color: var(--ink-faint);
+}
+
+.auto-backup-note svg {
+  color: var(--ok);
+  flex: none;
+}
+
+/* ---- operations card ---- */
+
+.ops-row {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: var(--sp-3) var(--sp-4);
+  padding: var(--sp-4) var(--sp-5);
+  border-top: 1px solid var(--hairline-soft);
+  align-items: start;
+}
+
+.ops-row:first-child {
+  border-top: 0;
+}
+
+.ops-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ops-label .ops-name {
+  font-size: var(--body-sm);
+  font-weight: var(--body-sm-w);
+  color: var(--ink);
+}
+
+.ops-label .ops-hint {
+  font-size: var(--micro);
+  line-height: var(--micro-lh);
+  color: var(--ink-faint);
+}
+
+.ops-control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.ops-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.ops-inline .text-input {
+  flex: 1;
+  min-width: 200px;
+}
+
+.ops-inline .text-input.mono {
+  font-family: var(--font-mono);
+  font-size: var(--body-sm);
+}
+
+.migrate-picker {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.migrate-picker select {
+  flex: 1;
+  min-width: 160px;
+}
+
+.migrate-arrow {
+  color: var(--ink-faint);
+  flex: none;
+}
+
+.copied-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--caption);
+  color: var(--ink-muted);
+}
+
+.copied-result .copied-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+.copied-file {
+  padding: 2px 8px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--micro);
+}
+
+/* ---- loading / error ---- */
+
+.list-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-6);
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+}
+
+.loading-pulse {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--r-full);
+  background: var(--ink-faint);
+  animation: pulse 1.2s ease-in-out infinite;
+  flex: none;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}

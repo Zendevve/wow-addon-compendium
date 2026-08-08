@@ -1,0 +1,426 @@
+/* ==========================================================================
+   Overview: segmented Scan / Doctor / Validation panels. Tables are the
+   `.row` component's conventions (canvas ground, hairline-soft underline),
+   status chips are the semantic dims from tokens. Token-only, per DESIGN.md.
+   ========================================================================== */
+
+.ov-page {
+  gap: var(--sp-4);
+}
+
+.ov-tabs {
+  align-self: flex-start;
+}
+
+.ov-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+/* ---- panel header: counts + actions ---- */
+
+.ov-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+
+.ov-counts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+  letter-spacing: var(--body-sm-ls);
+}
+
+.ov-counts-sub {
+  color: var(--ink-muted);
+  font-weight: 400;
+}
+
+.ov-counts b {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.ov-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.ov-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-full);
+  background: var(--ink-faint);
+  flex: none;
+}
+
+.ov-dot.-ok {
+  background: var(--ok);
+}
+
+.ov-dot.-warn {
+  background: var(--warn);
+}
+
+.ov-dot.-error {
+  background: var(--error);
+}
+
+.ov-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+/* Badge-counted Fix All: dark count on the white pill. */
+.ov-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--r-pill);
+  background: var(--on-primary, #0b0b0a);
+  color: var(--canvas-inverse);
+  font-size: var(--micro);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: -0.12px;
+}
+
+.ov-text-ok {
+  color: var(--ok);
+}
+
+.ov-text-warn {
+  color: var(--warn);
+}
+
+/* ---- semantic chips (dims from tokens) ---- */
+
+.ov-chip.-ok {
+  background: var(--ok-dim);
+  color: var(--ok);
+}
+
+.ov-chip.-warn {
+  background: var(--warn-dim);
+  color: var(--warn);
+}
+
+.ov-chip.-error {
+  background: var(--error-dim);
+  color: var(--error);
+}
+
+.ov-chip.-info {
+  background: var(--surface-2);
+  color: var(--ink-muted);
+}
+
+/* ---- table (`.row` conventions: canvas ground, hairline separators) ---- */
+
+.ov-table-wrap {
+  overflow-x: auto;
+}
+
+.ov-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.ov-table th {
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--hairline);
+  color: var(--ink-faint);
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  line-height: var(--caption-lh);
+  letter-spacing: var(--caption-ls);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ov-table td {
+  padding: var(--sp-3);
+  border-bottom: 1px solid var(--hairline-soft);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+  letter-spacing: var(--body-sm-ls);
+  vertical-align: middle;
+}
+
+.ov-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.ov-table tbody tr {
+  transition: background-color 120ms ease;
+}
+
+.ov-table tbody tr:hover {
+  background: var(--surface-1);
+}
+
+.ov-col-status {
+  width: 120px;
+}
+
+.ov-col-ver {
+  width: 110px;
+}
+
+.ov-col-src {
+  width: 180px;
+}
+
+.ov-col-toc {
+  width: 160px;
+}
+
+.ov-col-actions {
+  width: 130px;
+  text-align: right;
+}
+
+.ov-col-actions .ov-fix-btn {
+  margin-left: auto;
+}
+
+/* ---- addon cell ---- */
+
+.ov-addon {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.ov-addon-name {
+  color: var(--ink);
+}
+
+.ov-rename {
+  display: block;
+  color: var(--ink-faint);
+  font-size: var(--micro);
+  line-height: var(--micro-lh);
+  margin-top: 2px;
+}
+
+.ov-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  color: var(--ink-faint);
+  font-size: var(--micro);
+  line-height: var(--micro-lh);
+  white-space: nowrap;
+}
+
+.ov-tag.-tracked {
+  background: var(--accent-dim);
+  color: var(--accent-strong);
+}
+
+.ov-tag.-drifted {
+  background: var(--warn-dim);
+  color: var(--warn);
+}
+
+/* ---- version / source / issues cells ---- */
+
+.ov-ver {
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.ov-src {
+  display: block;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-faint);
+}
+
+.ov-issues {
+  color: var(--ink-muted);
+  font-size: var(--caption);
+  line-height: var(--caption-lh);
+  letter-spacing: var(--caption-ls);
+}
+
+.ov-issue-msg {
+  color: var(--ink-muted);
+}
+
+.ov-more {
+  color: var(--ink-faint);
+}
+
+.ov-row-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--error);
+  font-weight: 500;
+}
+
+/* ---- row fix pill (smaller than the 40px hero pill) ---- */
+
+.ov-fix-btn {
+  height: 30px;
+  padding: 0 var(--sp-3);
+  gap: 6px;
+  font-size: var(--caption);
+  font-weight: var(--caption-w);
+  letter-spacing: var(--caption-ls);
+}
+
+/* ---- scan-level errors + end-of-batch failure dump ---- */
+
+.ov-errors,
+.ov-dump {
+  background: var(--error-dim);
+  border-radius: var(--r-lg);
+  padding: var(--sp-4);
+  color: var(--error);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+}
+
+.ov-errors-head,
+.ov-dump-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  font-weight: 500;
+}
+
+.ov-errors-head {
+  display: inline-flex;
+  gap: var(--sp-2);
+}
+
+.ov-errors ul,
+.ov-dump ul {
+  margin-top: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding-left: var(--sp-5);
+  list-style: disc;
+  color: var(--ink-muted);
+}
+
+.ov-errors ul li,
+.ov-dump ul li {
+  font-weight: 400;
+}
+
+.ov-dump-close {
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  color: var(--ink-muted);
+}
+
+.ov-dump-close:hover {
+  background: var(--error-dim);
+  color: var(--error);
+}
+
+/* ---- loading + spinner ---- */
+
+.ov-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-6) 0;
+  color: var(--ink-muted);
+  font-size: var(--body);
+  line-height: var(--body-lh);
+}
+
+.ov-spinner {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--hairline-strong);
+  border-top-color: var(--ink-muted);
+  animation: ov-spin 0.7s linear infinite;
+}
+
+.ov-spinner.-dark {
+  border-color: rgba(11, 11, 10, 0.25);
+  border-top-color: #0b0b0a;
+}
+
+@keyframes ov-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---- doctor check list ---- */
+
+.ov-check-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.ov-check {
+  display: grid;
+  grid-template-columns: 190px auto 1fr;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-1);
+  border-bottom: 1px solid var(--hairline-soft);
+}
+
+.ov-check:last-child {
+  border-bottom: 0;
+}
+
+.ov-check-name {
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-check-msg {
+  color: var(--ink-muted);
+  font-size: var(--body-sm);
+  line-height: var(--body-sm-lh);
+  letter-spacing: var(--body-sm-ls);
+}
+
+@media (max-width: 810px) {
+  .ov-check {
+    grid-template-columns: auto 1fr;
+    row-gap: var(--sp-2);
+  }
+
+  .ov-check-msg {
+    grid-column: 1 / -1;
+  }
+}

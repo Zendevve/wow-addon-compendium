@@ -32,6 +32,11 @@ function normalize(name: keyof Service, p: Promise<unknown>): Promise<unknown> {
   return p.then((raw) => {
     if (raw === null || raw === undefined) return raw;
     switch (name) {
+      case "DetectInstalls":
+      case "Profiles":
+      case "Sources":
+      case "SavedVarsAccounts":
+        return Array.isArray(raw) ? raw : [];
       case "Scan": {
         const s = raw as Record<string, unknown>;
         const addons = (s.addons ?? []) as Record<string, unknown>[];
@@ -45,65 +50,6 @@ function normalize(name: keyof Service, p: Promise<unknown>): Promise<unknown> {
         s.errors = s.errors ?? [];
         return s;
       }
-      case "DetectInstalls":
-      case "Profiles":
-      case "Sources":
-      case "SavedVarsAccounts":
-        return Array.isArray(raw) ? raw : [];
-      case "AddonInfo": {
-        const r = raw as Record<string, unknown>;
-        r.matches = r.matches ?? [];
-        return r;
-      }
-      case "Doctor": {
-        const r = raw as Record<string, unknown>;
-        r.checks = r.checks ?? [];
-        return r;
-      }
-      case "SavedVarsList": {
-        const r = raw as Record<string, unknown>;
-        r.files = r.files ?? [];
-        return r;
-      }
-      case "SavedVarsMigrate": {
-        const r = raw as Record<string, unknown>;
-        r.copied = r.copied ?? [];
-        return r;
-      }
-      case "ListBackups": {
-        const r = raw as Record<string, unknown>;
-        const snapshots = (r.snapshots ?? []) as Record<string, unknown>[];
-        for (const s of snapshots) s.folders = s.folders ?? [];
-        r.snapshots = snapshots;
-        return r;
-      }
-      case "RestoreBackup": {
-        const r = raw as Record<string, unknown>;
-        r.restored = r.restored ?? [];
-        r.skipped = r.skipped ?? [];
-        return r;
-      }
-      case "ExportCollection": {
-        const r = raw as Record<string, unknown>;
-        r.addons = r.addons ?? [];
-        return r;
-      }
-      case "ImportCollection": {
-        const r = raw as Record<string, unknown>;
-        r.installed = r.installed ?? [];
-        return r;
-      }
-      case "ExportSnapshot": {
-        const r = raw as Record<string, unknown>;
-        r.warnings = r.warnings ?? [];
-        return r;
-      }
-      case "CheckSnapshot": {
-        const r = raw as Record<string, unknown>;
-        r.updates = r.updates ?? [];
-        r.errors = r.errors ?? [];
-        return r;
-      }
       case "Validate": {
         const v = raw as Record<string, unknown>;
         v.addons = v.addons ?? [];
@@ -115,16 +61,28 @@ function normalize(name: keyof Service, p: Promise<unknown>): Promise<unknown> {
         f.fixes = f.fixes ?? [];
         return f;
       }
-      case "InstallZip": {
-        const z = raw as Record<string, unknown>;
-        z.errors = z.errors ?? [];
-        return z;
+      case "InstallZip":
+      case "InstallSource":
+      case "RestoreAddon":
+      case "RollbackToVersion": {
+        const r = raw as Record<string, unknown>;
+        r.installed = r.installed ?? [];
+        r.replaced = r.replaced ?? [];
+        r.skipped = r.skipped ?? [];
+        r.errors = r.errors ?? [];
+        return r;
       }
       case "CheckUpdates": {
         const u = raw as Record<string, unknown>;
         u.updates = u.updates ?? [];
         u.errors = u.errors ?? [];
         return u;
+      }
+      case "ApplyUpdate":
+      case "ApplyAllUpdates": {
+        const b = raw as Record<string, unknown>;
+        b.applied = b.applied ?? [];
+        return b;
       }
       case "TrackedAddons": {
         const t = raw as Record<string, unknown>;
@@ -136,20 +94,6 @@ function normalize(name: keyof Service, p: Promise<unknown>): Promise<unknown> {
         r.versions = r.versions ?? [];
         return r;
       }
-      case "RollbackToVersion": {
-        const r = raw as Record<string, unknown>;
-        r.installed = r.installed ?? [];
-        r.replaced = r.replaced ?? [];
-        r.skipped = r.skipped ?? [];
-        r.errors = r.errors ?? [];
-        return r;
-      }
-      case "ApplyUpdate":
-      case "ApplyAllUpdates": {
-        const b = raw as Record<string, unknown>;
-        b.applied = b.applied ?? [];
-        return b;
-      }
       case "SearchCatalog": {
         const c = raw as Record<string, unknown>;
         c.results = c.results ?? [];
@@ -160,15 +104,6 @@ function normalize(name: keyof Service, p: Promise<unknown>): Promise<unknown> {
         const c = raw as Record<string, unknown>;
         c.addons = c.addons ?? [];
         return c;
-      }
-      case "InstallSource":
-      case "RestoreAddon": {
-        const s = raw as Record<string, unknown>;
-        s.installed = s.installed ?? [];
-        s.replaced = s.replaced ?? [];
-        s.skipped = s.skipped ?? [];
-        s.errors = s.errors ?? [];
-        return s;
       }
       case "Collections": {
         const c = raw as Record<string, unknown>;
@@ -195,6 +130,53 @@ function normalize(name: keyof Service, p: Promise<unknown>): Promise<unknown> {
         const installs = (r.installs ?? []) as Record<string, unknown>[];
         for (const inst of installs) inst.errors = inst.errors ?? [];
         r.installs = installs;
+        return r;
+      }
+      case "AddonInfo": {
+        const r = raw as Record<string, unknown>;
+        r.matches = r.matches ?? [];
+        return r;
+      }
+      case "Doctor": {
+        const r = raw as Record<string, unknown>;
+        r.checks = r.checks ?? [];
+        return r;
+      }
+      case "SavedVarsList": {
+        const r = raw as Record<string, unknown>;
+        r.files = r.files ?? [];
+        return r;
+      }
+      case "SavedVarsMigrate": {
+        const r = raw as Record<string, unknown>;
+        r.copied = r.copied ?? [];
+        return r;
+      }
+      case "ListBackups": {
+        const r = raw as Record<string, unknown>;
+        r.snapshots = r.snapshots ?? [];
+        return r;
+      }
+      case "RestoreBackup": {
+        const r = raw as Record<string, unknown>;
+        r.restored = r.restored ?? [];
+        r.skipped = r.skipped ?? [];
+        return r;
+      }
+      case "ImportCollection": {
+        const r = raw as Record<string, unknown>;
+        r.installed = r.installed ?? [];
+        return r;
+      }
+      case "ExportSnapshot": {
+        const r = raw as Record<string, unknown>;
+        r.warnings = r.warnings ?? [];
+        return r;
+      }
+      case "CheckSnapshot": {
+        const r = raw as Record<string, unknown>;
+        r.updates = r.updates ?? [];
+        r.errors = r.errors ?? [];
         return r;
       }
       default:
@@ -225,7 +207,8 @@ export const service: Service = {
   SetAddonIgnored: (folder, ignored) => call("SetAddonIgnored", folder, ignored),
   RollbackAddon: (folder) => call("RollbackAddon", folder),
   ListAddonVersions: (folder) => call("ListAddonVersions", folder),
-  RollbackToVersion: (folder, version) => call("RollbackToVersion", folder, version),
+  RollbackToVersion: (folder, version) =>
+    call("RollbackToVersion", folder, version),
   SearchCatalog: (query) => call("SearchCatalog", query),
   Curated: () => call("Curated"),
   InstallSource: (source, allowReplace) =>
@@ -255,7 +238,8 @@ export const service: Service = {
     call("SavedVarsMigrate", fromAccount, toAccount, addon),
   BackupNow: () => call("BackupNow"),
   ListBackups: () => call("ListBackups"),
-  RestoreBackup: (id, allowReplace) => call("RestoreBackup", id, allowReplace),
+  RestoreBackup: (id, allowReplace) =>
+    call("RestoreBackup", id, allowReplace),
   ExportCollection: (outPath, collectionID, includeSavedVars) =>
     call("ExportCollection", outPath, collectionID, includeSavedVars),
   ImportCollection: (pathOrURL) => call("ImportCollection", pathOrURL),

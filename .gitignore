@@ -28,3 +28,4 @@ dist/
 
 # Competitor research reference (study material, not source)
 refs/
+/build/

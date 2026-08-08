@@ -62,53 +62,20 @@ jobs:
             exit 1
           fi
 
-      # The wails GUI packages (root main, cmd/wowfix-gui, internal/gui)
-      # are excluded here: on linux they need GTK/WebKit development
-      # headers and are built by the gui-build job (windows-latest).
+      # The wails GUI packages (root main, internal/gui) are excluded
+      # here: on linux they need GTK/WebKit development headers and are
+      # built by the gui-build job (windows-latest).
       - name: Vet
         shell: bash
         run: |
-          pkgs=$(go list ./... | grep -v -e '/cmd/wowfix-gui' -e '/internal/gui' -e '^github.com/wowfix/wowfix$')
+          pkgs=$(go list ./... | grep -v -e '/internal/gui' -e '^github.com/wowfix/wowfix$')
           go vet $pkgs
 
       - name: Test
         shell: bash
         run: |
-          pkgs=$(go list ./... | grep -v -e '/cmd/wowfix-gui' -e '/internal/gui' -e '^github.com/wowfix/wowfix$')
+          pkgs=$(go list ./... | grep -v -e '/internal/gui' -e '^github.com/wowfix/wowfix$')
           go test $pkgs -count=1
-
-      - name: Build (CLI only)
-        run: go build ./cmd/wowfix
-
-  crosscompile:
-    name: crosscompile
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.25.x'
-          cache: true
-
-      - name: Cross-compile CLI
-        run: |
-          mkdir -p dist
-          for target in linux/amd64 darwin/arm64 windows/amd64; do
-            os=${target%/*}
-            arch=${target#*/}
-            out=dist/wowfix-$os-$arch
-            if [ "$os" = "windows" ]; then out=$out.exe; fi
-            GOOS=$os GOARCH=$arch go build -o "$out" ./cmd/wowfix
-          done
-
-      - name: Upload binaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: wowfix-dist
-          path: dist/
 
   gui-build:
     name: gui-build (windows-latest)
