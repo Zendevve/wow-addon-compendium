@@ -6,7 +6,7 @@ validates TOC compatibility and installs addons from ZIP archives. It ships as a
 Windows desktop GUI (Wails v2 + WebView2) and a cross-platform CLI — one engine,
 two front-ends.
 
-![Go](https://img.shields.io/badge/Go-1.23+-00ADD8) ![Platform](https://img.shields.io/badge/Windows-Linux-macOS-lightgrey) ![CI](https://img.shields.io/github/actions/workflow/status/Zendevve/wow-addon-compendium/ci.yml?branch=main) ![Release](https://img.shields.io/github/v/release/Zendevve/wow-addon-compendium)
+![Go](https://img.shields.io/badge/Go-1.23+-00ADD8) ![Platform](https://img.shields.io/badge/Windows-Linux-macOS-lightgrey) ![CI](https://img.shields.io/github/actions/workflow/status/Zendevve/wowfix/ci.yml?branch=main) ![Release](https://img.shields.io/github/v/release/Zendevve/wowfix)
 
 ---
 

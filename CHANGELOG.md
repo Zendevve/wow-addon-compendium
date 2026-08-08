@@ -4,6 +4,33 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-08-08
+
+### Added
+
+- **Command palette** — press Ctrl+K / Ctrl+P anywhere to fuzzy-search
+  views and actions and jump straight to them.
+- **Per-addon version history and rollback** — the Updates view row menu
+  shows the recorded version log of a tracked addon and re-downloads a
+  specific past version. New CLI commands: `wowfix history <folder>` and
+  `wowfix rollback <folder> <version>`.
+- **SavedVars auto-backup** — Saved Variables are backed up automatically
+  the first time the list is opened.
+- **Setup flavor detection** — the setup flow now auto-derives the client
+  flavor (retail/classic) from the chosen install path.
+
+### Changed
+
+- **GUI overhaul — six-destination sidebar** — navigation is regrouped
+  into a compact sidebar: **Overview** hosts the Scan/Doctor/Validation
+  segments; **Catalog** is the single install surface, with ZIP browse
+  and drag-drop; **Backups** hosts the offline snapshot export/check;
+  **Settings** shows per-install status; **SavedVars** gains an Advanced
+  operations disclosure.
+- **Accessibility / reduced-motion hardening** — focus management,
+  contrast and animation handling tightened for keyboard and
+  reduced-motion users.
+
 ## [2.2.0] - 2026-08-07
 
 ### Added
